@@ -20,6 +20,7 @@ import type { Locator, Page } from '@playwright/test';
 import { expect as playExpect } from '@playwright/test';
 
 import { handleConfirmationDialog } from '/@/utility/operations';
+import { getTableRowCount } from '/@/utility/table';
 
 import { BasePage } from './base-page';
 
@@ -129,7 +130,8 @@ export class TasksPage extends BasePage {
   }
 
   async getTaskRowCount(): Promise<number> {
-    return this.taskList.getByRole('row').count();
+    // large tables do not render all the rows, the total number of rows is given by the table
+    return getTableRowCount(this.content.getByRole('table'));
   }
 
   async searchTasks(query: string): Promise<void> {

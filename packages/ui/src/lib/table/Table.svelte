@@ -18,6 +18,10 @@ import ListOrganizer from '../layouts/ListOrganizer.svelte';
 /* eslint-enable import/no-duplicates */
 import type { Column, Row } from './table';
 import { collapsedStateMap, tablePersistence } from './table-persistence-store.svelte';
+import { VirtualRows, VirtualSpacer } from './virtual-rows.svelte';
+
+// above this number of rows, only the visible rows are rendered (when virtualization is 'auto')
+const VIRTUALIZATION_THRESHOLD = 100;
 
 // The rows are keyed by the identity of the objects in `data`: a row is rendered again only when its object is
 // replaced by another object. To update a row, the caller must either replace its object in `data`,
@@ -46,6 +50,11 @@ interface Props {
   enableLayoutConfiguration?: boolean;
   // number of selected items in the list
   selectedItemsNumber?: number;
+  /**
+   * Render only the rows visible in the scroll container of the table:
+   * 'auto' (default) when there are more than 100 rows, 'always' or 'never'
+   */
+  virtualization?: 'auto' | 'always' | 'never';
 }
 
 let {
@@ -61,6 +70,7 @@ let {
   // written by an effect below, the rule does not know about bindable props
   // eslint-disable-next-line no-useless-assignment
   selectedItemsNumber = $bindable(),
+  virtualization = 'auto',
 }: Props = $props();
 
 let columnItems: ListOrganizerItem[] = $state([]);
@@ -275,6 +285,41 @@ const sortedData: T[] = $derived.by(() => {
   return data.toSorted(comparator);
 });
 
+const virtualRows = new VirtualRows<T>();
+
+const virtualized: boolean = $derived(
+  virtualization === 'always' || (virtualization === 'auto' && sortedData.length > VIRTUALIZATION_THRESHOLD),
+);
+
+// the rows to render, and the spacers taking the place of the rows not rendered when virtualized
+const renderedEntries: (T | VirtualSpacer)[] = $derived(
+  virtualized
+    ? virtualRows
+        .getEntries(sortedData)
+        .map(entry => (entry instanceof VirtualSpacer ? entry : sortedData[entry.index]!))
+    : sortedData,
+);
+
+function getDisplayedChildren(object: T): T[] {
+  return collapsed.includes(key(object)) ? [] : (row.info.children?.(object) ?? []);
+}
+
+// the index of each row for accessibility (aria-rowindex) and the total number of rows (aria-rowcount),
+// counting the header row and the displayed children rows, as not all the rows are in the DOM
+// when the table is virtualized
+const rowsIndexing: { indexes: Map<T, number>; count: number } = $derived.by(() => {
+  // a new map is computed on each change, it is never modified afterwards
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  const indexes = new Map<T, number>();
+  // the header row has the index 1
+  let index = 2;
+  for (const object of sortedData) {
+    indexes.set(object, index);
+    index += 1 + getDisplayedChildren(object).length;
+  }
+  return { indexes, count: index - 1 };
+});
+
 function sort(column: Column<T>): void {
   if (!column?.info.comparator) {
     // column is not sortable
@@ -458,12 +503,14 @@ function handleRowKeyDown(object: T, event: KeyboardEvent): void {
   class="w-full mx-5"
   class:hidden={data.length === 0}
   role="table"
-  aria-label={kind}>
+  aria-label={kind}
+  aria-rowcount={rowsIndexing.count}>
   <!-- Table header -->
   <div role="rowgroup" class="relative">
     <div
       class="grid grid-table gap-x-0.5 h-7 sticky top-0 text-[var(--pd-table-header-text)] uppercase z-2"
-      role="row">
+      role="row"
+      aria-rowindex={1}>
       <div class="whitespace-nowrap justify-self-start" role="columnheader"></div>
       {#if row.info.selectable}
         <div class="whitespace-nowrap place-self-center" role="columnheader">
@@ -525,11 +572,18 @@ function handleRowKeyDown(object: T, event: KeyboardEvent): void {
     {/if}
   </div>
   <!-- Table body -->
-  <div role="rowgroup">
-    {#each sortedData as object (object)}
+  <div role="rowgroup" {@attach virtualized ? virtualRows.body : undefined}>
+    {#each renderedEntries as entry (entry instanceof VirtualSpacer ? entry.key : entry)}
+      {#if entry instanceof VirtualSpacer}
+        <div role="presentation" aria-hidden="true" style="height: {entry.height}px"></div>
+      {:else}
+      {@const object = entry}
       {@const children = row.info.children?.(object) ?? []}
       {@const itemKey = key(object)}
-      <div class="min-h-[48px] h-fit bg-[var(--pd-content-card-bg)] rounded-lg mb-2 border border-[var(--pd-content-table-border)]">
+      {@const rowIndex = rowsIndexing.indexes.get(object) ?? 0}
+      <div
+        class="min-h-[48px] h-fit bg-[var(--pd-content-card-bg)] rounded-lg mb-2 border border-[var(--pd-content-table-border)]"
+        {@attach virtualized ? virtualRows.row(object) : undefined}>
         <div
           class="grid grid-table gap-x-0.5 min-h-[48px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pd-button-focus-ring)]"
           class:group={!!row.info.onClick}
@@ -540,6 +594,7 @@ function handleRowKeyDown(object: T, event: KeyboardEvent): void {
             children.length === 0}
           class:cursor-pointer={isRowClickable(object)}
           role="row"
+          aria-rowindex={rowIndex}
           tabindex={isRowClickable(object) ? 0 : undefined}
           aria-label={label(object)}
           onclick={(event): void => handleRowClick(object, event)}
@@ -602,6 +657,7 @@ function handleRowKeyDown(object: T, event: KeyboardEvent): void {
               class="grid grid-table gap-x-0.5 hover:bg-[var(--pd-content-card-hover-bg)]"
               class:rounded-b-lg={i === children.length - 1}
               role="row"
+              aria-rowindex={rowIndex + 1 + i}
               aria-label={child.name}>
               <div class="whitespace-nowrap justify-self-start" role="cell"></div>
               {#if row.info.selectable}
@@ -635,6 +691,7 @@ function handleRowKeyDown(object: T, event: KeyboardEvent): void {
           {/each}
         {/if}
       </div>
+      {/if}
     {/each}
   </div>
 </div>

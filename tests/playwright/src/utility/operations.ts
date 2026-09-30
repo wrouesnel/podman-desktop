@@ -468,28 +468,31 @@ async function waitForPodmanMachineStoppedState(podmanResourceCard: ResourceConn
 
 export async function getVolumeNameForContainer(page: Page, containerName: string): Promise<string> {
   return test.step('Get volume name for container', async () => {
-    let volumeName: string | null;
     let volumeSummaryContent: string[];
     try {
       const navigationBar = new NavigationBar(page);
       const volumePage = await navigationBar.openVolumes();
       await playExpect(volumePage.heading).toBeVisible({ timeout: 10_000 });
-      const rows = await volumePage.getAllTableRows();
-
-      for (let i = rows.length - 1; i > 0; i--) {
-        volumeName = await rows[i].getByRole('cell').nth(3).getByRole('button').textContent();
-        if (volumeName) {
-          const volumeDetails = await volumePage.openVolumeDetails(volumeName);
-          await volumeDetails.activateTab(VolumeDetailsPage.SUMMARY_TAB);
-          volumeSummaryContent = await volumeDetails.tabContent.allTextContents();
-          for (const content of volumeSummaryContent) {
-            if (content.includes(containerName)) {
-              await volumeDetails.backLink.click();
-              return volumeName;
-            }
-          }
-          await volumeDetails.backLink.click();
+      // collect the names first, as opening the details of a volume leaves the table
+      const volumeNames: string[] = [];
+      await volumePage.forEachTableRow(async row => {
+        const name = await row.getByRole('cell').nth(3).getByRole('button').textContent();
+        if (name) {
+          volumeNames.push(name);
         }
+      });
+
+      for (const volumeName of volumeNames.toReversed()) {
+        const volumeDetails = await volumePage.openVolumeDetails(volumeName);
+        await volumeDetails.activateTab(VolumeDetailsPage.SUMMARY_TAB);
+        volumeSummaryContent = await volumeDetails.tabContent.allTextContents();
+        for (const content of volumeSummaryContent) {
+          if (content.includes(containerName)) {
+            await volumeDetails.backLink.click();
+            return volumeName;
+          }
+        }
+        await volumeDetails.backLink.click();
       }
       return '';
     } catch (error) {

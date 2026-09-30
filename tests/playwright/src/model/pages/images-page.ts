@@ -170,8 +170,13 @@ export class ImagesPage extends MainPage {
 
   async countImagesByName(name: string): Promise<number> {
     return test.step(`Count images matching: ${name}`, async () => {
-      const locator = this.page.getByRole('row').and(this.page.getByLabel(name, { exact: true }));
-      return locator.count();
+      let count = 0;
+      await this.forEachTableRow(async row => {
+        if ((await row.getAttribute('aria-label')) === name) {
+          count++;
+        }
+      });
+      return count;
     });
   }
 
@@ -259,15 +264,11 @@ export class ImagesPage extends MainPage {
 
   async getCountOfImagesByStatus(status: string): Promise<number> {
     return test.step(`Get count from ${this.title} for images with status: ${status}`, async () => {
-      const currentRows = await this.getAllTableRows();
       let count = 0;
-      if (currentRows.length < 2) return 0;
-
-      for (let rowNum = 1; rowNum < currentRows.length; rowNum++) {
-        //skip header
-        const statusCount = await currentRows[rowNum].getByRole('status').getByTitle(status, { exact: true }).count();
+      await this.forEachTableRow(async row => {
+        const statusCount = await row.getByRole('status').getByTitle(status, { exact: true }).count();
         if (statusCount > 0) ++count;
-      }
+      });
       return count;
     });
   }

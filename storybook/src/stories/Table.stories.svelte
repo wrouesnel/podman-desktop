@@ -1,4 +1,5 @@
 <script context="module" lang="ts">
+/* eslint-disable sonarjs/no-use-of-empty-return-value -- {@render} is valid Svelte 5 syntax */
 import { Table, TableColumn, TableDurationColumn, TableRow, TableSimpleColumn } from '@podman-desktop/ui-svelte';
 import { type Args, defineMeta, type StoryContext } from '@storybook/addon-svelte-csf';
 import { fn } from 'storybook/test';
@@ -34,6 +35,13 @@ type Group = {
 };
 
 const group: Group[] = [{ name: 'Teacher' }, { name: 'Student' }];
+
+// a large list, to show the virtualization of the rows (only the visible rows are rendered)
+const manyPeople: Person[] = Array.from({ length: 5000 }, (_, index) => ({
+  name: `Person ${index}`,
+  duration: new Date().getTime() - index * 60000,
+  selected: false,
+}));
 
 const nameCol: TableColumn<Person, string> = new TableColumn('Name', {
   renderMapping: obj => obj.name,
@@ -89,6 +97,13 @@ const rowGroup = new TableRow<Group, Person>({
   <Table {...args}></Table>
 {/snippet}
 
+<!-- the rows are virtualized in their scroll container, as in the pages of the application -->
+{#snippet scrollableTemplate(args: Args<typeof Story>, context: StoryContext<typeof Story>)}
+  <div style="height: 600px; overflow-y: auto">
+    {@render template(args, context)}
+  </div>
+{/snippet}
+
 <Story
   name="Basic"
   args={{
@@ -112,4 +127,14 @@ const rowGroup = new TableRow<Group, Person>({
     data: people,
     columns: [nameCol, durationCol, actionsCol],
     row: rowClickRow,
+  }} />
+
+<Story
+  name="Large table"
+  template={scrollableTemplate}
+  args={{
+    kind: 'people',
+    data: manyPeople,
+    columns,
+    row,
   }} />

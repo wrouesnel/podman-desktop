@@ -222,13 +222,12 @@ export async function countKubernetesPodReplicas(page: Page, expectedPodName: st
     const kubernetesPodsPage = await kubernetesBar.openTabPage(KubernetesResources.Pods);
 
     let counter = 0;
-    const rows = await kubernetesPodsPage.getAllTableRows();
-    for (let i = rows.length - 1; i > 0; i--) {
-      const podName = await rows[i].getByRole('cell').nth(3).getByRole('button').textContent();
+    await kubernetesPodsPage.forEachTableRow(async row => {
+      const podName = await row.getByRole('cell').nth(3).getByRole('button').textContent();
       if (podName?.includes(expectedPodName)) {
         counter += 1;
       }
-    }
+    });
     return counter;
   });
 }
@@ -239,13 +238,16 @@ export async function getFirstPodFromDeployment(page: Page, deploymentName: stri
     const kubernetesBar = await navigationBar.openKubernetes();
     const kubernetesPodsPage = await kubernetesBar.openTabPage(KubernetesResources.Pods);
 
-    const rows = await kubernetesPodsPage.getAllTableRows();
-
-    for (let i = 1; i < rows.length; i++) {
-      const podName = await rows[i].getByRole('cell').nth(3).getByRole('button').locator('div').first().textContent();
+    let foundPodName: string | undefined;
+    await kubernetesPodsPage.forEachTableRow(async row => {
+      const podName = await row.getByRole('cell').nth(3).getByRole('button').locator('div').first().textContent();
       if (podName?.includes(deploymentName)) {
-        return podName;
+        foundPodName = podName;
+        return true;
       }
+    });
+    if (foundPodName) {
+      return foundPodName;
     }
 
     throw new Error(`No pods found for deployment: ${deploymentName}`);

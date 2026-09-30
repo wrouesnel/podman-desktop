@@ -19,6 +19,7 @@
 import { type Locator, type Page, test } from '@playwright/test';
 import { expect as playExpect } from '@playwright/test';
 
+import { findTableRow, forEachTableRow, getTableRowCount } from '/@/utility/table';
 import { waitUntil } from '/@/utility/wait';
 
 import { BasePage } from './base-page';
@@ -91,8 +92,20 @@ export abstract class MainPage extends BasePage {
     return await this.page.getByRole('row').first().isVisible();
   }
 
+  /**
+   * Get the rows currently rendered in the table (including the header row).
+   * Large tables are virtualized and only render the visible rows: use forEachTableRow to visit all the rows.
+   */
   async getAllTableRows(): Promise<Locator[]> {
     return await this.rowTable.getByRole('row').all();
+  }
+
+  /**
+   * Call `visit` for each row of the table (except the header row), scrolling the table if needed.
+   * The iteration stops when `visit` returns true.
+   */
+  async forEachTableRow(visit: (row: Locator) => Promise<boolean | void>): Promise<void> {
+    await forEachTableRow(this.rowTable, visit);
   }
 
   async getRowsFromTableByStatus(status: string): Promise<Locator[]> {
@@ -101,13 +114,13 @@ export abstract class MainPage extends BasePage {
         sendError: false,
       });
 
-      const rows = await this.getAllTableRows();
-      const filteredRows = [];
-      for (let rowNum = 1; rowNum < rows.length; rowNum++) {
-        //skip header
-        const statusCount = await rows[rowNum].getByRole('cell').nth(2).getByTitle(status, { exact: true }).count();
-        if (statusCount > 0) filteredRows.push(rows[rowNum]);
-      }
+      const filteredRows: Locator[] = [];
+      await this.forEachTableRow(async row => {
+        const statusCount = await row.getByRole('cell').nth(2).getByTitle(status, { exact: true }).count();
+        const label = await row.getAttribute('aria-label');
+        // the locators returned by getAllTableRows depend on the rendered rows, use a locator by name instead
+        if (statusCount > 0 && label) filteredRows.push(this.rowTable.getByRole('row', { name: label, exact: true }));
+      });
       return filteredRows;
     });
   }
@@ -117,9 +130,8 @@ export abstract class MainPage extends BasePage {
       await waitUntil(async () => await this.rowsAreVisible(), {
         sendError: false,
       });
-      const table = this.content.getByRole('table');
-      const rows = await table.getByRole('row').all();
-      return rows.length > 1 ? rows.length - 1 : 0;
+      // large tables do not render all the rows, the total number of rows is given by the table
+      return getTableRowCount(this.content.getByRole('table'));
     });
   }
 
@@ -130,7 +142,8 @@ export abstract class MainPage extends BasePage {
         .and(this.page.getByLabel(name, { exact: exact }))
         .first();
 
-      return (await locator.count()) > 0 ? locator : undefined;
+      // scroll the table to find the row if it is not rendered (large tables only render the visible rows)
+      return findTableRow(this.rowTable, locator);
     });
   }
 
