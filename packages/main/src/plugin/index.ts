@@ -82,6 +82,8 @@ import type {
   ImageUpdateStatus,
   KubeContext,
   KubernetesContextResources,
+  KubernetesResourcesChanges,
+  KubernetesResourcesVersion,
   KubernetesTroubleshootingInformation,
   ListImagesOptions,
   ListOrganizerItem,
@@ -3063,6 +3065,18 @@ export class PluginSystem {
     this.ipcHandle('kubernetes:getActiveResourcesCount', async (_listener): Promise<ResourceCount[]> => {
       return kubernetesClient.getActiveResourcesCount();
     });
+
+    this.ipcHandle(
+      'kubernetes:getResourcesChanges',
+      async (
+        _listener,
+        contextName: string,
+        resourceName: string,
+        since?: KubernetesResourcesVersion,
+      ): Promise<KubernetesResourcesChanges> => {
+        return kubernetesClient.getResourcesChanges(contextName, resourceName, since);
+      },
+    );
 
     this.ipcHandle(
       'kubernetes:getResources',

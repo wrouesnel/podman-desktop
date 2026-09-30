@@ -85,6 +85,8 @@ import type {
   ItemInfo,
   KubeContext,
   KubernetesContextResources,
+  KubernetesResourcesChanges,
+  KubernetesResourcesVersion,
   KubernetesTroubleshootingInformation,
   ListImagesOptions,
   ListOrganizerItem,
@@ -2141,6 +2143,17 @@ export function initExposure(): void {
   contextBridge.exposeInMainWorld('kubernetesGetActiveResourcesCount', async (): Promise<ResourceCount[]> => {
     return ipcInvoke('kubernetes:getActiveResourcesCount');
   });
+
+  contextBridge.exposeInMainWorld(
+    'kubernetesGetResourcesChanges',
+    async (
+      contextName: string,
+      resourceName: string,
+      since?: KubernetesResourcesVersion,
+    ): Promise<KubernetesResourcesChanges> => {
+      return ipcInvoke('kubernetes:getResourcesChanges', contextName, resourceName, since);
+    },
+  );
 
   contextBridge.exposeInMainWorld(
     'kubernetesGetResources',

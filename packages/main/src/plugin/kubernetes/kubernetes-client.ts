@@ -74,6 +74,8 @@ import type {
   ForwardOptions,
   KubeContext,
   KubernetesContextResources,
+  KubernetesResourcesChanges,
+  KubernetesResourcesVersion,
   KubernetesTroubleshootingInformation,
   ResourceCount,
   ResourceName,
@@ -1890,6 +1892,23 @@ export class KubernetesClient {
 
   public getResources(contextNames: string[], resourceName: string): KubernetesContextResources[] {
     return this.contextsStatesDispatcher?.getResources(contextNames, resourceName) ?? [];
+  }
+
+  public getResourcesChanges(
+    contextName: string,
+    resourceName: string,
+    since?: KubernetesResourcesVersion,
+  ): KubernetesResourcesChanges {
+    return (
+      this.contextsStatesDispatcher?.getResourcesChanges(contextName, resourceName, since) ?? {
+        contextName,
+        epoch: '',
+        generation: 0,
+        full: true,
+        items: [],
+        deleted: [],
+      }
+    );
   }
 
   public getTroubleshootingInformation(): KubernetesTroubleshootingInformation {

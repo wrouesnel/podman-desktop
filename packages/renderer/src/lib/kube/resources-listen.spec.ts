@@ -17,9 +17,9 @@
  ***********************************************************************/
 
 import type { KubernetesObject } from '@kubernetes/client-node';
-import type { KubernetesContextResources } from '@podman-desktop/core-api';
+import type { KubeContext, KubernetesResourcesChanges } from '@podman-desktop/core-api';
 import { writable } from 'svelte/store';
-import { beforeAll, expect, type Mock, test, vi } from 'vitest';
+import { beforeAll, beforeEach, expect, type Mock, test, vi } from 'vitest';
 
 import * as contexts from '/@/stores/kubernetes-contexts';
 
@@ -29,17 +29,11 @@ const callbacks = new Map<string, () => void>();
 
 vi.mock(import('/@/stores/kubernetes-contexts'));
 
-const eventEmitter = {
-  receive: (message: string, callback: () => void): void => {
-    callbacks.set(message, callback);
-  },
-};
-
 beforeAll(() => {
   Object.defineProperty(window, 'events', {
     value: {
       receive: (message: string, callback: () => void) => {
-        eventEmitter.receive(message, callback);
+        callbacks.set(message, callback);
         return {
           dispose: (): void => {},
         };
@@ -47,6 +41,40 @@ beforeAll(() => {
     },
   });
 });
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  callbacks.clear();
+  vi.mocked(window.isExperimentalConfigurationEnabled).mockResolvedValue(true);
+  vi.mocked(contexts).kubernetesContexts = writable([context('ctx1', true)]);
+});
+
+function context(name: string, currentContext: boolean): KubeContext {
+  return { currentContext, name, cluster: 'cluster1', user: 'user1' };
+}
+
+function res(name: string, resourceVersion = '1'): KubernetesObject {
+  return { metadata: { name, uid: `uid-${name}`, resourceVersion } };
+}
+
+function changes(
+  generation: number,
+  items: KubernetesObject[],
+  options?: { full?: boolean; deleted?: string[]; contextName?: string; epoch?: string },
+): KubernetesResourcesChanges {
+  return {
+    contextName: options?.contextName ?? 'ctx1',
+    epoch: options?.epoch ?? 'epoch1',
+    generation,
+    full: options?.full ?? false,
+    items,
+    deleted: options?.deleted ?? [],
+  };
+}
+
+function fireUpdate(resourceName: string): void {
+  callbacks.get(`kubernetes-update-${resourceName}`)?.();
+}
 
 test('listenResources is undefined in non experimental mode', async () => {
   vi.mocked(window.isExperimentalConfigurationEnabled).mockResolvedValue(false);
@@ -60,291 +88,181 @@ test('listenResources is undefined in non experimental mode (getConfigurationVal
   expect(result).toBeUndefined();
 });
 
-test('non filtered resources', async () => {
-  vi.mocked(window.isExperimentalConfigurationEnabled).mockResolvedValue(true);
-  vi.mocked(contexts).kubernetesContexts = writable([
-    {
-      currentContext: true,
-      name: 'ctx1',
-      cluster: 'cluster1',
-      user: 'user1',
-    },
-  ]);
-  const resource1: KubernetesObject = {
-    metadata: {
-      name: 'res1',
-    },
-  };
-  const contextResource: KubernetesContextResources = {
-    contextName: 'ctx1',
-    items: [resource1],
-  };
-
+test('all the resources are fetched initially', async () => {
+  vi.mocked(window.kubernetesGetResourcesChanges).mockResolvedValue(changes(1, [res('res1')], { full: true }));
   const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
-  vi.mocked(window.kubernetesGetResources).mockResolvedValue([contextResource]);
 
   const listener = await listenResources('resource1', {}, callbackSpy);
   expect(listener).not.toBeUndefined();
-
-  expect(window.kubernetesGetResources).toHaveBeenCalledWith(['ctx1'], 'resource1');
-
+  expect(window.kubernetesGetResourcesChanges).toHaveBeenCalledWith('ctx1', 'resource1', undefined);
   await vi.waitFor(() => {
-    expect(callbackSpy).toHaveBeenCalledWith([resource1]);
+    expect(callbackSpy).toHaveBeenCalledWith([res('res1')]);
   });
 });
 
-test('updated resources without filter', async () => {
-  vi.mocked(window.isExperimentalConfigurationEnabled).mockResolvedValue(true);
-  vi.mocked(contexts).kubernetesContexts = writable([
-    {
-      currentContext: true,
-      name: 'ctx1',
-      cluster: 'cluster1',
-      user: 'user1',
-    },
-  ]);
-  const resource1: KubernetesObject = {
-    metadata: {
-      name: 'res1',
-    },
-  };
-  const contextResource: KubernetesContextResources = {
-    contextName: 'ctx1',
-    items: [resource1],
-  };
-
+test('only the changes since the last version are fetched and applied', async () => {
+  vi.mocked(window.kubernetesGetResourcesChanges).mockResolvedValueOnce(
+    changes(3, [res('res1'), res('res2'), res('res3')], { full: true }),
+  );
   const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
-  vi.mocked(window.kubernetesGetResources).mockResolvedValue([contextResource]);
-  const listener = await listenResources('resource1', {}, callbackSpy);
-  expect(listener).not.toBeUndefined();
+  await listenResources('resource1', {}, callbackSpy);
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenCalledWith([res('res1'), res('res2'), res('res3')]));
 
-  expect(window.kubernetesGetResources).toHaveBeenCalledWith(['ctx1'], 'resource1');
-
-  await vi.waitFor(() => {
-    expect(callbackSpy).toHaveBeenCalledWith([resource1]);
+  // res2 is updated, res3 is deleted, res4 is added
+  vi.mocked(window.kubernetesGetResourcesChanges).mockResolvedValueOnce(
+    changes(6, [res('res2', '2'), res('res4')], { deleted: ['uid-res3'] }),
+  );
+  fireUpdate('resource1');
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenLastCalledWith([res('res1'), res('res2', '2'), res('res4')]));
+  expect(window.kubernetesGetResourcesChanges).toHaveBeenLastCalledWith('ctx1', 'resource1', {
+    epoch: 'epoch1',
+    generation: 3,
   });
 
-  // now update the resources and send an event
-  const newResource: KubernetesObject = {
-    metadata: {
-      name: 'res2',
-    },
-  };
-  contextResource.items = [resource1, newResource];
-  const callback = callbacks.get('kubernetes-update-resource1');
-  expect(callback).toBeDefined();
-  callbackSpy.mockClear();
-  callback!();
-  await vi.waitFor(() => {
-    expect(callbackSpy).toHaveBeenCalledWith([resource1, newResource]);
-  });
+  // the next request is done since the new version
+  vi.mocked(window.kubernetesGetResourcesChanges).mockResolvedValueOnce(changes(6, []));
+  fireUpdate('resource1');
+  await vi.waitFor(() =>
+    expect(window.kubernetesGetResourcesChanges).toHaveBeenLastCalledWith('ctx1', 'resource1', {
+      epoch: 'epoch1',
+      generation: 6,
+    }),
+  );
+});
+
+test('unchanged objects keep their identity', async () => {
+  const res1 = res('res1');
+  vi.mocked(window.kubernetesGetResourcesChanges).mockResolvedValueOnce(changes(1, [res1], { full: true }));
+  const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
+  await listenResources('resource1', {}, callbackSpy);
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenCalledOnce());
+
+  vi.mocked(window.kubernetesGetResourcesChanges).mockResolvedValueOnce(changes(2, [res('res2')]));
+  fireUpdate('resource1');
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenCalledTimes(2));
+  expect(callbackSpy.mock.calls[1]![0][0]).toBe(res1);
+});
+
+test('the callback is not called when nothing changed', async () => {
+  vi.mocked(window.kubernetesGetResourcesChanges).mockResolvedValueOnce(changes(1, [res('res1')], { full: true }));
+  const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
+  await listenResources('resource1', {}, callbackSpy);
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenCalledOnce());
+
+  vi.mocked(window.kubernetesGetResourcesChanges).mockResolvedValueOnce(changes(1, []));
+  fireUpdate('resource1');
+  await vi.waitFor(() => expect(window.kubernetesGetResourcesChanges).toHaveBeenCalledTimes(2));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(callbackSpy).toHaveBeenCalledOnce();
+});
+
+test('a full response replaces all the known resources', async () => {
+  vi.mocked(window.kubernetesGetResourcesChanges).mockResolvedValueOnce(
+    changes(2, [res('res1'), res('res2')], { full: true }),
+  );
+  const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
+  await listenResources('resource1', {}, callbackSpy);
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenCalledOnce());
+
+  // the informer has been restarted: new epoch
+  vi.mocked(window.kubernetesGetResourcesChanges).mockResolvedValueOnce(
+    changes(1, [res('res3')], { full: true, epoch: 'epoch2' }),
+  );
+  fireUpdate('resource1');
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenLastCalledWith([res('res3')]));
 });
 
 test('filtered resources', async () => {
   const searchTermStore = writable<string>('');
-  vi.mocked(window.isExperimentalConfigurationEnabled).mockResolvedValue(true);
-  vi.mocked(contexts).kubernetesContexts = writable([
-    {
-      currentContext: true,
-      name: 'ctx1',
-      cluster: 'cluster1',
-      user: 'user1',
-    },
-  ]);
-  const resource1: KubernetesObject = {
-    metadata: {
-      name: 'res1',
-    },
-  };
-  const resource2: KubernetesObject = {
-    metadata: {
-      name: 'res2',
-    },
-  };
-  const contextResource: KubernetesContextResources = {
-    contextName: 'ctx1',
-    items: [resource1, resource2],
-  };
-
-  const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
-  vi.mocked(window.kubernetesGetResources).mockResolvedValue([contextResource]);
-
-  const listener = await listenResources(
-    'resource1',
-    {
-      searchTermStore,
-    },
-    callbackSpy,
+  vi.mocked(window.kubernetesGetResourcesChanges).mockResolvedValue(
+    changes(2, [res('res1'), res('res2')], { full: true }),
   );
-  expect(listener).not.toBeUndefined();
+  const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
 
-  expect(window.kubernetesGetResources).toHaveBeenCalledWith(['ctx1'], 'resource1');
+  await listenResources('resource1', { searchTermStore }, callbackSpy);
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenCalledWith([res('res1'), res('res2')]));
 
-  await vi.waitFor(() => {
-    expect(callbackSpy).toHaveBeenCalledWith([resource1, resource2]);
-  });
-
-  // now set a search term matching no resource
-  callbackSpy.mockClear();
   searchTermStore.set('notfound');
-  await vi.waitFor(() => {
-    expect(callbackSpy).toHaveBeenCalledWith([]);
-  });
+  expect(callbackSpy).toHaveBeenLastCalledWith([]);
 
-  // now set a search term matching one resource
-  callbackSpy.mockClear();
   searchTermStore.set('res1');
-  await vi.waitFor(() => {
-    expect(callbackSpy).toHaveBeenCalledWith([resource1]);
-  });
+  expect(callbackSpy).toHaveBeenLastCalledWith([res('res1')]);
+
+  // changing the search term does not fetch the resources again
+  expect(window.kubernetesGetResourcesChanges).toHaveBeenCalledOnce();
 });
 
 test('updated resources with filter', async () => {
-  const searchTermStore = writable<string>('');
-  vi.mocked(window.isExperimentalConfigurationEnabled).mockResolvedValue(true);
-  vi.mocked(contexts).kubernetesContexts = writable([
-    {
-      currentContext: true,
-      name: 'ctx1',
-      cluster: 'cluster1',
-      user: 'user1',
-    },
-  ]);
-  const resource1: KubernetesObject = {
-    metadata: {
-      name: 'res1',
-    },
-  };
-  const resource2: KubernetesObject = {
-    metadata: {
-      name: 'res2',
-    },
-  };
-  const contextResource: KubernetesContextResources = {
-    contextName: 'ctx1',
-    items: [resource1, resource2],
-  };
-
-  const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
-  vi.mocked(window.kubernetesGetResources).mockResolvedValue([contextResource]);
-
-  const listener = await listenResources(
-    'resource1',
-    {
-      searchTermStore,
-    },
-    callbackSpy,
+  const searchTermStore = writable<string>('res1');
+  vi.mocked(window.kubernetesGetResourcesChanges).mockResolvedValueOnce(
+    changes(2, [res('res1'), res('res2')], { full: true }),
   );
-  expect(listener).not.toBeUndefined();
+  const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
+  await listenResources('resource1', { searchTermStore }, callbackSpy);
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenCalledWith([res('res1')]));
 
-  expect(window.kubernetesGetResources).toHaveBeenCalledWith(['ctx1'], 'resource1');
-
-  await vi.waitFor(() => {
-    expect(callbackSpy).toHaveBeenCalledWith([resource1, resource2]);
-  });
-
-  // now set a search term matching no resource
-  callbackSpy.mockClear();
-  searchTermStore.set('res3');
-  await vi.waitFor(() => {
-    expect(callbackSpy).toHaveBeenCalledWith([]);
-  });
-
-  // now update the resources and send an event
-  const newResource: KubernetesObject = {
-    metadata: {
-      name: 'res3',
-    },
-  };
-  contextResource.items = [resource1, resource2, newResource];
-  const callback = callbacks.get('kubernetes-update-resource1');
-  expect(callback).toBeDefined();
-  callbackSpy.mockClear();
-  callback!();
-  await vi.waitFor(() => {
-    expect(callbackSpy).toHaveBeenCalledWith([newResource]);
-  });
+  vi.mocked(window.kubernetesGetResourcesChanges).mockResolvedValueOnce(changes(3, [res('res1b')]));
+  fireUpdate('resource1');
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenLastCalledWith([res('res1'), res('res1b')]));
 });
 
 test('updates received while fetching are grouped in a single fetch', async () => {
-  vi.mocked(window.isExperimentalConfigurationEnabled).mockResolvedValue(true);
-  vi.mocked(window.kubernetesGetResources).mockReset();
-  vi.mocked(contexts).kubernetesContexts = writable([
-    { currentContext: true, name: 'ctx1', cluster: 'cluster1', user: 'user1' },
-  ]);
-  const resolvers: ((value: KubernetesContextResources[]) => void)[] = [];
-  vi.mocked(window.kubernetesGetResources).mockImplementation(async () => {
+  const resolvers: ((value: KubernetesResourcesChanges) => void)[] = [];
+  vi.mocked(window.kubernetesGetResourcesChanges).mockImplementation(async () => {
     return new Promise(resolve => resolvers.push(resolve));
   });
   const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
 
   const listener = await listenResources('resource2', {}, callbackSpy);
-  expect(window.kubernetesGetResources).toHaveBeenCalledTimes(1);
+  expect(window.kubernetesGetResourcesChanges).toHaveBeenCalledTimes(1);
 
   // a burst of updates while the first fetch is running
   for (let i = 0; i < 100; i++) {
-    callbacks.get('kubernetes-update-resource2')?.();
+    fireUpdate('resource2');
   }
-  expect(window.kubernetesGetResources).toHaveBeenCalledTimes(1);
+  expect(window.kubernetesGetResourcesChanges).toHaveBeenCalledTimes(1);
 
-  const resource1 = { metadata: { name: 'res1' } };
-  resolvers[0]!([{ contextName: 'ctx1', items: [resource1] }]);
+  resolvers[0]!(changes(1, [res('res1')], { full: true }));
   // a single fetch is done for the burst of updates
-  await vi.waitFor(() => expect(window.kubernetesGetResources).toHaveBeenCalledTimes(2));
-  expect(callbackSpy).toHaveBeenCalledWith([resource1]);
+  await vi.waitFor(() => expect(window.kubernetesGetResourcesChanges).toHaveBeenCalledTimes(2));
+  expect(callbackSpy).toHaveBeenCalledWith([res('res1')]);
 
-  const resource2 = { metadata: { name: 'res2' } };
-  resolvers[1]!([{ contextName: 'ctx1', items: [resource1, resource2] }]);
-  await vi.waitFor(() => expect(callbackSpy).toHaveBeenLastCalledWith([resource1, resource2]));
-  expect(window.kubernetesGetResources).toHaveBeenCalledTimes(2);
-  listener?.dispose();
-});
-
-test('changing the search term does not fetch the resources again', async () => {
-  const searchTermStore = writable<string>('');
-  vi.mocked(window.isExperimentalConfigurationEnabled).mockResolvedValue(true);
-  vi.mocked(window.kubernetesGetResources).mockReset();
-  vi.mocked(contexts).kubernetesContexts = writable([
-    { currentContext: true, name: 'ctx1', cluster: 'cluster1', user: 'user1' },
-  ]);
-  const resource1 = { metadata: { name: 'res1' } };
-  const resource2 = { metadata: { name: 'res2' } };
-  vi.mocked(window.kubernetesGetResources).mockResolvedValue([{ contextName: 'ctx1', items: [resource1, resource2] }]);
-  const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
-
-  const listener = await listenResources('resource3', { searchTermStore }, callbackSpy);
-  await vi.waitFor(() => expect(callbackSpy).toHaveBeenCalledWith([resource1, resource2]));
-
-  searchTermStore.set('res2');
-  expect(callbackSpy).toHaveBeenLastCalledWith([resource2]);
-  expect(window.kubernetesGetResources).toHaveBeenCalledTimes(1);
+  resolvers[1]!(changes(2, [res('res2')]));
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenLastCalledWith([res('res1'), res('res2')]));
+  expect(window.kubernetesGetResourcesChanges).toHaveBeenCalledTimes(2);
   listener?.dispose();
 });
 
 test('resources fetched for a previous context are ignored', async () => {
-  vi.mocked(window.isExperimentalConfigurationEnabled).mockResolvedValue(true);
-  vi.mocked(window.kubernetesGetResources).mockReset();
-  const contextsStore = writable([{ currentContext: true, name: 'ctx1', cluster: 'cluster1', user: 'user1' }]);
+  const contextsStore = writable([context('ctx1', true)]);
   vi.mocked(contexts).kubernetesContexts = contextsStore;
-  const resolvers: ((value: KubernetesContextResources[]) => void)[] = [];
-  vi.mocked(window.kubernetesGetResources).mockImplementation(async () => {
+  const resolvers: ((value: KubernetesResourcesChanges) => void)[] = [];
+  vi.mocked(window.kubernetesGetResourcesChanges).mockImplementation(async () => {
     return new Promise(resolve => resolvers.push(resolve));
   });
   const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
 
   const listener = await listenResources('resource4', {}, callbackSpy);
   // the context changes while fetching the resources of ctx1
-  contextsStore.set([
-    { currentContext: false, name: 'ctx1', cluster: 'cluster1', user: 'user1' },
-    { currentContext: true, name: 'ctx2', cluster: 'cluster1', user: 'user1' },
-  ]);
+  contextsStore.set([context('ctx1', false), context('ctx2', true)]);
 
-  resolvers[0]!([{ contextName: 'ctx1', items: [{ metadata: { name: 'res-ctx1' } }] }]);
-  await vi.waitFor(() => expect(window.kubernetesGetResources).toHaveBeenLastCalledWith(['ctx2'], 'resource4'));
+  resolvers[0]!(changes(1, [res('res-ctx1')], { full: true }));
+  // the resources of the new context are fetched from scratch
+  await vi.waitFor(() =>
+    expect(window.kubernetesGetResourcesChanges).toHaveBeenLastCalledWith('ctx2', 'resource4', undefined),
+  );
   expect(callbackSpy).not.toHaveBeenCalled();
 
-  const resourceCtx2 = { metadata: { name: 'res-ctx2' } };
-  resolvers[1]!([{ contextName: 'ctx2', items: [resourceCtx2] }]);
-  await vi.waitFor(() => expect(callbackSpy).toHaveBeenCalledWith([resourceCtx2]));
+  resolvers[1]!(changes(1, [res('res-ctx2')], { full: true, contextName: 'ctx2' }));
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenCalledWith([res('res-ctx2')]));
   listener?.dispose();
+});
+
+test('no current context', async () => {
+  vi.mocked(contexts).kubernetesContexts = writable([context('ctx1', false)]);
+  const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
+  await listenResources('resource1', {}, callbackSpy);
+  fireUpdate('resource1');
+  expect(window.kubernetesGetResourcesChanges).not.toHaveBeenCalled();
+  expect(callbackSpy).not.toHaveBeenCalled();
 });

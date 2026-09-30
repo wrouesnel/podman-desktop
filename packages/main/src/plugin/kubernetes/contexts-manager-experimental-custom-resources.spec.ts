@@ -30,12 +30,14 @@ import type { CustomResourcesMonitorOptions } from './custom-resources-monitor.j
 import { CustomResourcesMonitor } from './custom-resources-monitor.js';
 import { GenericResourceFactory } from './generic-resource-factory.js';
 import { KubeConfigSingleContext } from './kubeconfig-single-context.js';
+import { ResourceChangesTracker } from './resource-changes-tracker.js';
 import type { ResourceFactory } from './resource-factory.js';
 import { ResourceFactoryBase } from './resource-factory.js';
 import type { CacheUpdatedEvent, ResourceInformer } from './resource-informer.js';
 
 interface MockInformer {
   informer: ResourceInformer<KubernetesObject>;
+  tracker: ResourceChangesTracker;
   items: KubernetesObject[];
   fireCacheUpdated: () => void;
 }
@@ -44,7 +46,9 @@ const informers = new Map<string, MockInformer>();
 
 function createMockInformer(kubeconfig: KubeConfigSingleContext, resource: string): ResourceInformer<KubernetesObject> {
   const cacheUpdatedListeners: ((e: CacheUpdatedEvent) => void)[] = [];
+  const tracker = new ResourceChangesTracker();
   const mock: MockInformer = {
+    tracker,
     items: [],
     fireCacheUpdated: (): void =>
       cacheUpdatedListeners.forEach(listener => listener({ kubeconfig, resourceName: resource, countChanged: true })),
@@ -58,6 +62,7 @@ function createMockInformer(kubeconfig: KubeConfigSingleContext, resource: strin
         (): ObjectCache<KubernetesObject> => ({ list: () => mock.items }) as unknown as ObjectCache<KubernetesObject>,
       ),
       dispose: vi.fn(),
+      changesTracker: tracker,
     } as unknown as ResourceInformer<KubernetesObject>,
   };
   informers.set(resource, mock);
@@ -250,4 +255,56 @@ test('the custom resources monitors are disposed with the manager', async () => 
 
   manager.dispose();
   expect(monitor.dispose).toHaveBeenCalled();
+});
+
+test('getResourcesChanges returns all the resources, then the changes', async () => {
+  const { manager } = await startManager();
+  const crdsInformer = informers.get('customresourcedefinitions')!;
+  const crd1 = { metadata: { name: 'crd1', uid: 'uid1' } };
+  const crd2 = { metadata: { name: 'crd2', uid: 'uid2' } };
+  crdsInformer.items = [crd1, crd2];
+  crdsInformer.tracker.upsert(crd1);
+  crdsInformer.tracker.upsert(crd2);
+
+  const all = manager.getResourcesChanges('context1', 'customresourcedefinitions');
+  expect(all).toEqual({
+    contextName: 'context1',
+    epoch: crdsInformer.tracker.epoch,
+    generation: 2,
+    full: true,
+    items: [crd1, crd2],
+    deleted: [],
+  });
+
+  crdsInformer.tracker.delete(crd1);
+  crdsInformer.items = [crd2];
+  const changes = manager.getResourcesChanges('context1', 'customresourcedefinitions', {
+    epoch: all.epoch,
+    generation: all.generation,
+  });
+  expect(changes).toEqual({
+    contextName: 'context1',
+    epoch: crdsInformer.tracker.epoch,
+    generation: 3,
+    full: false,
+    items: [],
+    deleted: ['uid1'],
+  });
+
+  // unknown version: all the resources are returned
+  expect(
+    manager.getResourcesChanges('context1', 'customresourcedefinitions', { epoch: 'other', generation: 1 }),
+  ).toEqual(expect.objectContaining({ full: true, items: [crd2] }));
+});
+
+test('getResourcesChanges returns no resources for an unknown resource', async () => {
+  const { manager } = await startManager();
+  expect(manager.getResourcesChanges('context1', 'unknown')).toEqual({
+    contextName: 'context1',
+    epoch: '',
+    generation: 0,
+    full: true,
+    items: [],
+    deleted: [],
+  });
 });

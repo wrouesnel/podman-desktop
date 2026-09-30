@@ -22,3 +22,28 @@ export interface KubernetesContextResources {
   contextName: string;
   items: readonly KubernetesObject[];
 }
+
+// identifies a state of the resources of a context, to request the changes since this state
+export interface KubernetesResourcesVersion {
+  // identifies the source of the resources (it changes when the informer is restarted)
+  epoch: string;
+  // incremented on each change of the resources
+  generation: number;
+}
+
+// KubernetesResourcesChanges are the changes of the resources of a context since a given version,
+// or all the resources when `full` is true
+export interface KubernetesResourcesChanges extends KubernetesResourcesVersion {
+  contextName: string;
+  // true when `items` contains all the resources, and the resources known by the receiver must be replaced
+  full: boolean;
+  // the resources added or updated since the requested version (all the resources if `full` is true)
+  items: readonly KubernetesObject[];
+  // the keys (see getKubernetesObjectKey) of the resources deleted since the requested version
+  deleted: readonly string[];
+}
+
+// getKubernetesObjectKey returns a key identifying a Kubernetes object
+export function getKubernetesObjectKey(object: KubernetesObject): string {
+  return object.metadata?.uid ?? `${object.metadata?.namespace ?? ''}/${object.metadata?.name ?? ''}`;
+}

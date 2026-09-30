@@ -30,6 +30,7 @@ import type { Event } from '@podman-desktop/core-api';
 import { Emitter } from '/@/plugin/events/emitter.js';
 
 import type { KubeConfigSingleContext } from './kubeconfig-single-context.js';
+import { ResourceChangesTracker } from './resource-changes-tracker.js';
 
 interface BaseEvent {
   kubeconfig: KubeConfigSingleContext;
@@ -65,6 +66,7 @@ export class ResourceInformer<T extends KubernetesObject> implements Disposable 
   #kindName: string;
   #informer: Informer<T> | undefined;
   #offline: boolean = false;
+  #changesTracker = new ResourceChangesTracker();
 
   #onCacheUpdated = new Emitter<CacheUpdatedEvent>();
   onCacheUpdated: Event<CacheUpdatedEvent> = this.#onCacheUpdated.event;
@@ -101,6 +103,7 @@ export class ResourceInformer<T extends KubernetesObject> implements Disposable 
 
     this.#informer.on(UPDATE, (obj: T) => {
       removeManagedFields(obj);
+      this.#changesTracker.upsert(obj);
       this.#onCacheUpdated.fire({
         kubeconfig: this.#kubeConfig,
         resourceName: this.#pluralName,
@@ -109,13 +112,15 @@ export class ResourceInformer<T extends KubernetesObject> implements Disposable 
     });
     this.#informer.on(ADD, (obj: T) => {
       removeManagedFields(obj);
+      this.#changesTracker.upsert(obj);
       this.#onCacheUpdated.fire({
         kubeconfig: this.#kubeConfig,
         resourceName: this.#pluralName,
         countChanged: true,
       });
     });
-    this.#informer.on(DELETE, (_obj: T) => {
+    this.#informer.on(DELETE, (obj: T) => {
+      this.#changesTracker.delete(obj);
       this.#onCacheUpdated.fire({
         kubeconfig: this.#kubeConfig,
         resourceName: this.#pluralName,
@@ -176,6 +181,11 @@ export class ResourceInformer<T extends KubernetesObject> implements Disposable 
         `error stopping the informer for resource ${this.#pluralName} on context ${this.#kubeConfig.getKubeConfig().currentContext}: ${String(err)}`,
       );
     });
+  }
+
+  // the tracker of the changes of the resources in the cache
+  get changesTracker(): ResourceChangesTracker {
+    return this.#changesTracker;
   }
 
   isOffline(): boolean {

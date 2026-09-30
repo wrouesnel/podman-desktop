@@ -21,6 +21,8 @@ import type {
   ContextPermission,
   IDisposable,
   KubernetesContextResources,
+  KubernetesResourcesChanges,
+  KubernetesResourcesVersion,
   KubernetesTroubleshootingInformation,
   ResourceCount,
 } from '@podman-desktop/core-api';
@@ -137,6 +139,14 @@ export class ContextsStatesDispatcher implements IDisposable {
 
   getResources(contextNames: string[], resourceName: string): KubernetesContextResources[] {
     return this.manager.getResources(contextNames, resourceName);
+  }
+
+  getResourcesChanges(
+    contextName: string,
+    resourceName: string,
+    since?: KubernetesResourcesVersion,
+  ): KubernetesResourcesChanges {
+    return this.manager.getResourcesChanges(contextName, resourceName, since);
   }
 
   getTroubleshootingInformation(): KubernetesTroubleshootingInformation {

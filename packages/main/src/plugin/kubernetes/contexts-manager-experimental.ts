@@ -22,6 +22,8 @@ import type {
   ContextPermission,
   Event,
   KubernetesContextResources,
+  KubernetesResourcesChanges,
+  KubernetesResourcesVersion,
   KubernetesResourceTypeInfo,
   KubernetesTroubleshootingInformation,
   ResourceCount,
@@ -215,6 +217,26 @@ export class ContextsManagerExperimental {
         items: value.list(),
       };
     });
+  }
+
+  // getResourcesChanges returns the changes of the resources of a context since the given version,
+  // or all the resources if the changes cannot be computed
+  getResourcesChanges(
+    contextName: string,
+    resourceName: string,
+    since?: KubernetesResourcesVersion,
+  ): KubernetesResourcesChanges {
+    const cache = this.#objectCaches.get(contextName, resourceName);
+    const informer = this.#informers.get(contextName, resourceName);
+    if (!cache || !informer) {
+      return { contextName, epoch: '', generation: 0, full: true, items: [], deleted: [] };
+    }
+    const tracker = informer.changesTracker;
+    const changes = tracker.getChangesSince(since);
+    if (changes) {
+      return { contextName, ...tracker.version, full: false, ...changes };
+    }
+    return { contextName, ...tracker.version, full: true, items: cache.list(), deleted: [] };
   }
 
   getContextsGeneralState(): Map<string, ContextGeneralState> {

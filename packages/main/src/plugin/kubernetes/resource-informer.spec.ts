@@ -380,3 +380,31 @@ test('ResourceInformer should remove the managedFields of the resources in the c
     ]);
   });
 });
+
+test('ResourceInformer should track the changes of the resources', async () => {
+  const kc = new KubeConfig();
+  kc.loadFromOptions(kcWith2contexts);
+  const listFn = vi.fn();
+  const kubeconfig = new KubeConfigSingleContext(kc, contexts[0]!);
+  const items = [
+    { metadata: { name: 'res1', namespace: 'ns1', uid: 'uid1' } },
+    { metadata: { name: 'res2', namespace: 'ns1', uid: 'uid2' } },
+  ];
+  listFn.mockResolvedValue({ apiVersion: 'v8', items: items });
+  const informer = new ResourceInformer<MyResource>({
+    kubeconfig,
+    path: '/a/path',
+    listFn,
+    kind: 'MyResource',
+    plural: 'myresources',
+  });
+  const initialVersion = informer.changesTracker.version;
+  const result = informer.start();
+  await vi.waitFor(() => {
+    expect(result.list()).toHaveLength(2);
+  });
+  expect(informer.changesTracker.getChangesSince(initialVersion)).toEqual({
+    items: result.list(),
+    deleted: [],
+  });
+});

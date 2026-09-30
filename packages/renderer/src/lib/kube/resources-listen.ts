@@ -17,7 +17,8 @@
  ***********************************************************************/
 
 import type { KubernetesObject } from '@kubernetes/client-node';
-import type { IDisposable } from '@podman-desktop/core-api';
+import type { IDisposable, KubernetesResourcesChanges, KubernetesResourcesVersion } from '@podman-desktop/core-api';
+import { getKubernetesObjectKey } from '@podman-desktop/core-api';
 import type { Unsubscriber, Writable } from 'svelte/store';
 
 import { kubernetesContexts } from '/@/stores/kubernetes-contexts';
@@ -39,6 +40,7 @@ export interface ListenResourcesOptions {
 //
 // A single fetch is running at a time: the events received while fetching are grouped in a single fetch,
 // and a change of searchTerm only filters again the last fetched resources.
+// Only the changes since the previous fetch are received from the backend, and applied to the known resources.
 export async function listenResources(
   resourceName: string,
   options: ListenResourcesOptions,
@@ -50,6 +52,10 @@ export async function listenResources(
   let searchTerm: string = '';
   let contextName: string | undefined;
   let searchTermStoreUnsubscribe: Unsubscriber | undefined;
+  // the resources known for the current context, by key, and their version
+  let known:
+    | { contextName: string; version: KubernetesResourcesVersion; objects: Map<string, KubernetesObject> }
+    | undefined;
   // the last resources fetched, for the context they have been fetched for
   let lastResources: { contextName: string; items: KubernetesObject[] } | undefined;
 
@@ -60,19 +66,43 @@ export async function listenResources(
     }
   };
 
+  const applyChanges = (changes: KubernetesResourcesChanges): void => {
+    // ignore changes fetched for a previous current context
+    if (changes.contextName !== contextName) {
+      return;
+    }
+    const objects = changes.full || !known ? new Map<string, KubernetesObject>() : known.objects;
+    for (const key of changes.deleted) {
+      objects.delete(key);
+    }
+    for (const item of changes.items) {
+      objects.set(getKubernetesObjectKey(item), item);
+    }
+    known = {
+      contextName: changes.contextName,
+      version: { epoch: changes.epoch, generation: changes.generation },
+      objects,
+    };
+    if (!changes.full && lastResources && !changes.items.length && !changes.deleted.length) {
+      // nothing changed
+      return;
+    }
+    lastResources = { contextName: changes.contextName, items: Array.from(objects.values()) };
+    sendFilteredResources();
+  };
+
   const refresher = createCoalescedRefresh(
-    async (): Promise<{ contextName: string; items: KubernetesObject[] } | undefined> => {
+    async (): Promise<KubernetesResourcesChanges | undefined> => {
       const fetchedContextName = contextName;
       if (!fetchedContextName) {
         return undefined;
       }
-      const result = await window.kubernetesGetResources([fetchedContextName], resourceName);
-      return { contextName: fetchedContextName, items: result.flatMap(r => r.items) };
+      const since = known?.contextName === fetchedContextName ? known.version : undefined;
+      return window.kubernetesGetResourcesChanges(fetchedContextName, resourceName, since);
     },
-    result => {
-      if (result) {
-        lastResources = result;
-        sendFilteredResources();
+    changes => {
+      if (changes) {
+        applyChanges(changes);
       }
     },
     () => {
@@ -94,6 +124,7 @@ export async function listenResources(
     }
     contextName = currentContext;
     lastResources = undefined;
+    known = undefined;
     if (!contextName) {
       callback([]);
       return;
