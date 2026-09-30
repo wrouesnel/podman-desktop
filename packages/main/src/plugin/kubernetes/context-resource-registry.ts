@@ -69,6 +69,10 @@ export class ContextResourceRegistry<T> {
     return Array.from(forContext.values());
   }
 
+  remove(context: string, resource: string): void {
+    this.#registry.get(context)?.delete(resource);
+  }
+
   removeForContext(contextName: string): void {
     this.#registry.delete(contextName);
   }

@@ -76,3 +76,18 @@ test('getForContextsAndResource', () => {
     },
   ]);
 });
+
+test('remove', () => {
+  registry.set('context1', 'resource1', 'value1');
+  registry.set('context1', 'resource2', 'value2');
+  registry.set('context2', 'resource1', 'value3');
+
+  registry.remove('context1', 'resource1');
+  expect(registry.get('context1', 'resource1')).toBeUndefined();
+  expect(registry.get('context1', 'resource2')).toEqual('value2');
+  expect(registry.get('context2', 'resource1')).toEqual('value3');
+
+  // removing an unknown resource or context does not fail
+  registry.remove('context1', 'unknown');
+  registry.remove('unknown', 'resource1');
+});

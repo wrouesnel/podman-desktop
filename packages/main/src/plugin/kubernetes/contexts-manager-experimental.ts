@@ -22,11 +22,12 @@ import type {
   ContextPermission,
   Event,
   KubernetesContextResources,
+  KubernetesResourceTypeInfo,
   KubernetesTroubleshootingInformation,
   ResourceCount,
   ResourceName,
 } from '@podman-desktop/core-api';
-import { GENERIC_KUBERNETES_RESOURCE_TYPES } from '@podman-desktop/core-api';
+import { CUSTOM_RESOURCE_DEFINITIONS_RESOURCE, GENERIC_KUBERNETES_RESOURCE_TYPES } from '@podman-desktop/core-api';
 
 import { Emitter } from '/@/plugin/events/emitter.js';
 
@@ -39,6 +40,7 @@ import { ContextResourceRegistry } from './context-resource-registry.js';
 import type { CurrentChangeEvent, DispatcherEvent } from './contexts-dispatcher.js';
 import { ContextsDispatcher } from './contexts-dispatcher.js';
 import { CronjobsResourceFactory } from './cronjobs-resource-factory.js';
+import { CustomResourcesMonitor } from './custom-resources-monitor.js';
 import { DeploymentsResourceFactory } from './deployments-resource-factory.js';
 import { EventsResourceFactory } from './events-resource-factory.js';
 import { GenericResourceFactory } from './generic-resource-factory.js';
@@ -72,6 +74,10 @@ export class ContextsManagerExperimental {
   #permissionsCheckers: ContextPermissionsChecker[];
   #informers: ContextResourceRegistry<ResourceInformer<KubernetesObject>>;
   #objectCaches: ContextResourceRegistry<ObjectCache<KubernetesObject>>;
+  // monitors of the custom resource types having instances, by context
+  #customResourcesMonitors: Map<string, CustomResourcesMonitor>;
+  // permissions checkers for the custom resource types
+  #customResourcesPermissionsCheckers: ContextResourceRegistry<ContextPermissionsChecker>;
 
   #onContextHealthStateChange = new Emitter<ContextHealthState>();
   onContextHealthStateChange: Event<ContextHealthState> = this.#onContextHealthStateChange.event;
@@ -101,6 +107,8 @@ export class ContextsManagerExperimental {
     this.#permissionsCheckers = [];
     this.#informers = new ContextResourceRegistry<ResourceInformer<KubernetesObject>>();
     this.#objectCaches = new ContextResourceRegistry<ObjectCache<KubernetesObject>>();
+    this.#customResourcesMonitors = new Map<string, CustomResourcesMonitor>();
+    this.#customResourcesPermissionsCheckers = new ContextResourceRegistry<ContextPermissionsChecker>();
     this.#dispatcher = new ContextsDispatcher();
     this.#dispatcher.onUpdate(this.onUpdate.bind(this));
     this.#dispatcher.onDelete(this.onDelete.bind(this));
@@ -236,6 +244,7 @@ export class ContextsManagerExperimental {
     this.disposeAllHealthChecks();
     this.disposeAllPermissionsCheckers();
     this.disposeAllInformers();
+    this.disposeAllCustomResourcesMonitors();
     this.#onContextHealthStateChange.dispose();
     this.#onContextDelete.dispose();
   }
@@ -270,6 +279,14 @@ export class ContextsManagerExperimental {
     for (const informer of this.#informers.getAll()) {
       informer.value.dispose();
     }
+  }
+
+  // disposeAllCustomResourcesMonitors disposes all custom resources monitors and removes them from registry
+  private disposeAllCustomResourcesMonitors(): void {
+    for (const monitor of this.#customResourcesMonitors.values()) {
+      monitor.dispose();
+    }
+    this.#customResourcesMonitors.clear();
   }
 
   getTroubleshootingInformation(): KubernetesTroubleshootingInformation {
@@ -336,37 +353,108 @@ export class ContextsManagerExperimental {
                 `a permission for resource ${resource} has been received but no factory is handling it, this should not happen`,
               );
             }
-            if (!factory.informer) {
-              // no informer for this factory, skipping
-              // (we may want to check permissions on some resource, without having to start an informer)
-              continue;
-            }
-            const informer = factory.informer.createInformer(event.kubeConfig);
-            this.#informers.set(contextName, resource, informer);
-            informer.onCacheUpdated((e: CacheUpdatedEvent) => {
-              this.#onResourceUpdated.fire({
-                contextName: e.kubeconfig.getKubeConfig().currentContext,
-                resourceName: e.resourceName,
-              });
-              if (e.countChanged) {
-                this.#onResourceCountUpdated.fire({
-                  contextName: e.kubeconfig.getKubeConfig().currentContext,
-                  resourceName: e.resourceName,
-                });
-              }
-            });
-            informer.onOffline((e: OfflineEvent) => {
-              this.#onOfflineChange.fire();
-              this.#objectCaches.removeForContext(e.kubeconfig.getKubeConfig().currentContext);
-            });
-            const cache = informer.start();
-            this.#objectCaches.set(contextName, resource, cache);
+            this.startInformer(event.kubeConfig, contextName, factory);
           }
         });
         await newPermissionChecker.start();
       }
     });
     await newHealthChecker.start({ timeout: HEALTH_CHECK_TIMEOUT_MS });
+  }
+
+  private startInformer(kubeConfig: KubeConfigSingleContext, contextName: string, factory: ResourceFactory): void {
+    if (!factory.informer) {
+      // no informer for this factory, skipping
+      // (we may want to check permissions on some resource, without having to start an informer)
+      return;
+    }
+    const resource = factory.resource;
+    const informer = factory.informer.createInformer(kubeConfig);
+    this.#informers.set(contextName, resource, informer);
+    informer.onCacheUpdated((e: CacheUpdatedEvent) => {
+      this.#onResourceUpdated.fire({
+        contextName: e.kubeconfig.getKubeConfig().currentContext,
+        resourceName: e.resourceName,
+      });
+      if (e.countChanged) {
+        this.#onResourceCountUpdated.fire({
+          contextName: e.kubeconfig.getKubeConfig().currentContext,
+          resourceName: e.resourceName,
+        });
+      }
+    });
+    informer.onOffline((e: OfflineEvent) => {
+      this.#onOfflineChange.fire();
+      this.#objectCaches.removeForContext(e.kubeconfig.getKubeConfig().currentContext);
+    });
+    const cache = informer.start();
+    this.#objectCaches.set(contextName, resource, cache);
+
+    if (resource === CUSTOM_RESOURCE_DEFINITIONS_RESOURCE) {
+      this.startCustomResourcesMonitor(kubeConfig, contextName, informer, cache);
+    }
+  }
+
+  // startCustomResourcesMonitor starts watching the custom resources of the types having instances,
+  // based on the CRDs received by the informer
+  private startCustomResourcesMonitor(
+    kubeConfig: KubeConfigSingleContext,
+    contextName: string,
+    crdsInformer: ResourceInformer<KubernetesObject>,
+    crdsCache: ObjectCache<KubernetesObject>,
+  ): void {
+    this.#customResourcesMonitors.get(contextName)?.dispose();
+    const monitor = new CustomResourcesMonitor({
+      kubeconfig: kubeConfig,
+      onInstantiated: (info: KubernetesResourceTypeInfo): void =>
+        this.startCustomResourceInformer(kubeConfig, contextName, info),
+      onRemoved: (resource: string): void => this.stopCustomResourceInformer(contextName, resource),
+    });
+    this.#customResourcesMonitors.set(contextName, monitor);
+    crdsInformer.onCacheUpdated(() => monitor.update(crdsCache.list()));
+    monitor.update(crdsCache.list());
+    monitor.start();
+  }
+
+  private startCustomResourceInformer(
+    kubeConfig: KubeConfigSingleContext,
+    contextName: string,
+    info: KubernetesResourceTypeInfo,
+  ): void {
+    const factory = new GenericResourceFactory(info);
+    const permissionChecker = new ContextPermissionsChecker(kubeConfig, contextName, {
+      attrs: {
+        namespace: info.namespaced ? kubeConfig.getNamespace() : undefined,
+        group: info.group,
+        resource: info.plural,
+        verb: 'watch',
+      },
+      resources: [info.resource],
+    });
+    this.#permissionsCheckers.push(permissionChecker);
+    this.#customResourcesPermissionsCheckers.set(contextName, info.resource, permissionChecker);
+    permissionChecker.onPermissionResult(this.onPermissionResult.bind(this));
+    permissionChecker.onPermissionResult((event: ContextPermissionResult) => {
+      if (event.permitted) {
+        this.startInformer(kubeConfig, contextName, factory);
+      }
+    });
+    permissionChecker.start().catch((err: unknown) => {
+      console.warn(`unable to check permissions for ${info.resource} on context ${contextName}`, String(err));
+    });
+  }
+
+  private stopCustomResourceInformer(contextName: string, resource: string): void {
+    const permissionChecker = this.#customResourcesPermissionsCheckers.get(contextName, resource);
+    if (permissionChecker) {
+      permissionChecker.dispose();
+      this.#permissionsCheckers = this.#permissionsCheckers.filter(checker => checker !== permissionChecker);
+      this.#customResourcesPermissionsCheckers.remove(contextName, resource);
+    }
+    this.#informers.get(contextName, resource)?.dispose();
+    this.#informers.remove(contextName, resource);
+    this.#objectCaches.remove(contextName, resource);
+    this.#onResourceCountUpdated.fire({ contextName, resourceName: resource });
   }
 
   protected stopMonitoring(contextName: string): void {
@@ -389,6 +477,10 @@ export class ContextsManagerExperimental {
     }
     this.#informers.removeForContext(contextName);
     this.#objectCaches.removeForContext(contextName);
+
+    this.#customResourcesMonitors.get(contextName)?.dispose();
+    this.#customResourcesMonitors.delete(contextName);
+    this.#customResourcesPermissionsCheckers.removeForContext(contextName);
   }
 
   // returns true if at least one informer for the context is 'offline'

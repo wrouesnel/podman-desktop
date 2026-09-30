@@ -19,17 +19,20 @@
 import '@testing-library/jest-dom/vitest';
 
 import type { KubernetesObject } from '@kubernetes/client-node';
+import type { IDisposable } from '@podman-desktop/core-api';
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { writable } from 'svelte/store';
 import { router } from 'tinro';
 import { beforeEach, expect, test, vi } from 'vitest';
 
 import { withConfirmation } from '/@/lib/dialogs/messagebox-utils';
+import { listenResources } from '/@/lib/kube/resources-listen';
 import { initListExperimental } from '/@/lib/kube/tests-helpers/init-lists';
 import * as states from '/@/stores/kubernetes-contexts-state';
 import { isKubernetesExperimentalModeStore } from '/@/stores/kubernetes-experimental';
 
 import KubeResourceList from './KubeResourceList.svelte';
+import { buildCRD } from './tests-helpers/crd';
 
 vi.mock(import('/@/lib/kube/resources-listen'));
 vi.mock(import('/@/stores/kubernetes-contexts-state'));
@@ -99,4 +102,32 @@ test('displays a message when experimental mode is disabled', async () => {
   render(KubeResourceList, { resource: 'statefulsets' });
 
   expect(screen.getByText('Experimental Kubernetes mode required')).toBeInTheDocument();
+});
+
+test('displays custom resources with the printer columns of the CRD', async () => {
+  const crd = buildCRD('cert-manager.io', 'Certificate', 'certificates', {
+    columns: [{ name: 'Secret', type: 'string', jsonPath: '.spec.secretName' }],
+  });
+  const certificate = {
+    apiVersion: 'cert-manager.io/v1',
+    kind: 'Certificate',
+    metadata: { name: 'cert1', namespace: 'ns1' },
+    spec: { secretName: 'cert1-tls' },
+  } as KubernetesObject;
+  const resources: Record<string, KubernetesObject[]> = {
+    customresourcedefinitions: [crd],
+    'certificates.cert-manager.io': [certificate],
+  };
+  vi.mocked(listenResources).mockImplementation(async (resourceName, _options, callback): Promise<IDisposable> => {
+    setTimeout(() => callback(resources[resourceName] ?? []));
+    return { dispose: vi.fn() };
+  });
+  render(KubeResourceList, { resource: 'certificates.cert-manager.io' });
+
+  await vi.waitFor(() => {
+    expect(screen.getByRole('cell', { name: 'cert1 ns1' })).toBeInTheDocument();
+  });
+  expect(screen.getByRole('heading', { name: 'Certificates' })).toBeInTheDocument();
+  expect(screen.getByRole('columnheader', { name: 'Secret' })).toBeInTheDocument();
+  expect(screen.getByRole('cell', { name: 'cert1-tls' })).toBeInTheDocument();
 });

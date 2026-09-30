@@ -16,6 +16,8 @@
  * SPDX-License-Identifier: Apache-2.0
  ***********************************************************************/
 
+import type { V1CustomResourceDefinition } from '@kubernetes/client-node';
+
 // category used to order and group the Kubernetes resource types in the UI
 export type KubernetesResourceCategory =
   | 'Workloads'
@@ -110,4 +112,39 @@ export const GENERIC_KUBERNETES_RESOURCE_TYPES: readonly KubernetesResourceTypeI
 
 export function getGenericKubernetesResourceType(resource: string): KubernetesResourceTypeInfo | undefined {
   return GENERIC_KUBERNETES_RESOURCE_TYPES.find(info => info.resource === resource);
+}
+
+// resource name of the CustomResourceDefinitions, used to discover the custom resource types
+export const CUSTOM_RESOURCE_DEFINITIONS_RESOURCE = 'customresourcedefinitions';
+
+// custom resources already displayed in a dedicated page
+const CUSTOM_RESOURCES_WITH_DEDICATED_PAGES = ['routes.route.openshift.io'];
+
+// getCustomResourceTypeInfo returns the type info of the resources defined by a CRD,
+// or undefined if the CRD does not define resources to display (not established, no served version, ...)
+export function getCustomResourceTypeInfo(crd: V1CustomResourceDefinition): KubernetesResourceTypeInfo | undefined {
+  const name = crd.metadata?.name;
+  if (!name || CUSTOM_RESOURCES_WITH_DEDICATED_PAGES.includes(name)) {
+    return undefined;
+  }
+  const established = crd.status?.conditions?.some(
+    condition => condition.type === 'Established' && condition.status === 'True',
+  );
+  if (!established) {
+    return undefined;
+  }
+  const servedVersions = crd.spec.versions.filter(version => version.served);
+  const version = servedVersions.find(version => version.storage) ?? servedVersions[0];
+  if (!version) {
+    return undefined;
+  }
+  return {
+    resource: name,
+    group: crd.spec.group,
+    version: version.name,
+    kind: crd.spec.names.kind,
+    plural: crd.spec.names.plural,
+    namespaced: crd.spec.scope === 'Namespaced',
+    category: 'Custom Resources',
+  };
 }
