@@ -18,7 +18,7 @@
 
 import type { ContextPermission, IDisposable } from '@podman-desktop/core-api';
 import type { ApiSenderType } from '@podman-desktop/core-api/api-sender';
-import { expect, test, vi } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 
 import type { ContextHealthState } from './context-health-checker.js';
 import type { ContextPermissionResult } from './context-permissions-checker.js';
@@ -26,6 +26,10 @@ import type { DispatcherEvent } from './contexts-dispatcher.js';
 import type { ContextsManagerExperimental } from './contexts-manager-experimental.js';
 import { ContextsStatesDispatcher } from './contexts-states-dispatcher.js';
 import type { KubeConfigSingleContext } from './kubeconfig-single-context.js';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 test('ContextsStatesDispatcher should call updateHealthStates when onContextHealthStateChange event is fired', () => {
   const manager: ContextsManagerExperimental = {
@@ -290,8 +294,10 @@ test('updateResourcesCount should call apiSender.send with kubernetes-resources-
   const apiSender: ApiSenderType = {
     send: vi.fn(),
   } as unknown as ApiSenderType;
+  vi.useFakeTimers();
   const dispatcher = new ContextsStatesDispatcher(manager, apiSender);
   dispatcher.updateResourcesCount();
+  vi.advanceTimersByTime(100);
   expect(vi.mocked(apiSender.send)).toHaveBeenCalledWith('kubernetes-resources-count');
 });
 
@@ -300,7 +306,58 @@ test('updateResource should call apiSender.send with kubernetes-`resource-name`'
   const apiSender: ApiSenderType = {
     send: vi.fn(),
   } as unknown as ApiSenderType;
+  vi.useFakeTimers();
   const dispatcher = new ContextsStatesDispatcher(manager, apiSender);
   dispatcher.updateResource('resource1');
+  vi.advanceTimersByTime(100);
   expect(vi.mocked(apiSender.send)).toHaveBeenCalledWith('kubernetes-update-resource1');
+});
+
+test('updates are grouped in a single notification per channel', () => {
+  vi.useFakeTimers();
+  const manager: ContextsManagerExperimental = {} as ContextsManagerExperimental;
+  const apiSender: ApiSenderType = {
+    send: vi.fn(),
+  } as unknown as ApiSenderType;
+  const dispatcher = new ContextsStatesDispatcher(manager, apiSender);
+  for (let i = 0; i < 1000; i++) {
+    dispatcher.updateResource('resource1');
+    dispatcher.updateActiveResourcesCount();
+  }
+  dispatcher.updateResource('resource2');
+  expect(vi.mocked(apiSender.send)).not.toHaveBeenCalled();
+
+  vi.advanceTimersByTime(100);
+  expect(vi.mocked(apiSender.send)).toHaveBeenCalledTimes(3);
+  expect(vi.mocked(apiSender.send)).toHaveBeenCalledWith('kubernetes-update-resource1');
+  expect(vi.mocked(apiSender.send)).toHaveBeenCalledWith('kubernetes-update-resource2');
+  expect(vi.mocked(apiSender.send)).toHaveBeenCalledWith('kubernetes-active-resources-count');
+});
+
+test('notifications are sent regularly when updates are received continuously', () => {
+  vi.useFakeTimers();
+  const manager: ContextsManagerExperimental = {} as ContextsManagerExperimental;
+  const apiSender: ApiSenderType = {
+    send: vi.fn(),
+  } as unknown as ApiSenderType;
+  const dispatcher = new ContextsStatesDispatcher(manager, apiSender);
+  // an update every 10ms during 1s
+  for (let i = 0; i < 100; i++) {
+    dispatcher.updateResource('resource1');
+    vi.advanceTimersByTime(10);
+  }
+  expect(vi.mocked(apiSender.send)).toHaveBeenCalledTimes(10);
+});
+
+test('pending notifications are not sent after dispose', () => {
+  vi.useFakeTimers();
+  const manager: ContextsManagerExperimental = {} as ContextsManagerExperimental;
+  const apiSender: ApiSenderType = {
+    send: vi.fn(),
+  } as unknown as ApiSenderType;
+  const dispatcher = new ContextsStatesDispatcher(manager, apiSender);
+  dispatcher.updateResource('resource1');
+  dispatcher.dispose();
+  vi.advanceTimersByTime(100);
+  expect(vi.mocked(apiSender.send)).not.toHaveBeenCalled();
 });

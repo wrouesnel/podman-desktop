@@ -23,6 +23,8 @@ import type { Unsubscriber, Writable } from 'svelte/store';
 import { kubernetesContexts } from '/@/stores/kubernetes-contexts';
 import { findMatchInLeaves } from '/@/stores/search-util';
 
+import { createCoalescedRefresh } from './coalesced-refresh';
+
 export interface ListenResourcesOptions {
   searchTermStore?: Writable<string>;
 }
@@ -33,7 +35,10 @@ export interface ListenResourcesOptions {
 // - watches kubernetes-update-${resourceName} events
 // - watches changes of current context
 // - watches changes of searchTerm
-// and on each event, fetch resources from the backend (informers) filter them on searchTerm and send them through the callback
+// and on each event, fetch resources from the backend (informers) filter them on searchTerm and send them through the callback.
+//
+// A single fetch is running at a time: the events received while fetching are grouped in a single fetch,
+// and a change of searchTerm only filters again the last fetched resources.
 export async function listenResources(
   resourceName: string,
   options: ListenResourcesOptions,
@@ -45,12 +50,41 @@ export async function listenResources(
   let searchTerm: string = '';
   let contextName: string | undefined;
   let searchTermStoreUnsubscribe: Unsubscriber | undefined;
+  // the last resources fetched, for the context they have been fetched for
+  let lastResources: { contextName: string; items: KubernetesObject[] } | undefined;
+
+  const sendFilteredResources = (): void => {
+    // ignore resources fetched for a previous current context
+    if (lastResources && lastResources.contextName === contextName) {
+      callback(filter(lastResources.items, searchTerm));
+    }
+  };
+
+  const refresher = createCoalescedRefresh(
+    async (): Promise<{ contextName: string; items: KubernetesObject[] } | undefined> => {
+      const fetchedContextName = contextName;
+      if (!fetchedContextName) {
+        return undefined;
+      }
+      const result = await window.kubernetesGetResources([fetchedContextName], resourceName);
+      return { contextName: fetchedContextName, items: result.flatMap(r => r.items) };
+    },
+    result => {
+      if (result) {
+        lastResources = result;
+        sendFilteredResources();
+      }
+    },
+    () => {
+      console.log(`error getting ${resourceName}`);
+    },
+  );
 
   const disposable = window.events.receive(`kubernetes-update-${resourceName}`, () => {
     if (!contextName) {
       return;
     }
-    collectAndSendFilteredResources(callback, contextName, resourceName, searchTerm);
+    refresher.refresh();
   });
 
   const kubernetesContextsUnsubscribe = kubernetesContexts.subscribe(contexts => {
@@ -59,51 +93,32 @@ export async function listenResources(
       return;
     }
     contextName = currentContext;
+    lastResources = undefined;
     if (!contextName) {
       callback([]);
       return;
     }
-    collectAndSendFilteredResources(callback, contextName, resourceName, searchTerm);
+    refresher.refresh();
   });
 
   if (options.searchTermStore) {
     searchTermStoreUnsubscribe = options.searchTermStore.subscribe(newSearchTerm => {
-      searchTerm = newSearchTerm;
-      if (!contextName) {
+      if (newSearchTerm === searchTerm) {
         return;
       }
-      collectAndSendFilteredResources(callback, contextName, resourceName, searchTerm);
+      searchTerm = newSearchTerm;
+      sendFilteredResources();
     });
   }
 
   return {
     dispose: (): void => {
+      refresher.dispose();
       disposable.dispose();
       kubernetesContextsUnsubscribe();
       searchTermStoreUnsubscribe?.();
     },
   };
-}
-
-function collectAndSendFilteredResources(
-  callback: (resoures: KubernetesObject[]) => void,
-  contextName: string,
-  resourceName: string,
-  searchTerm: string,
-): void {
-  window
-    .kubernetesGetResources([contextName], resourceName)
-    .then(result => {
-      callback(
-        filter(
-          result.flatMap(r => r.items),
-          searchTerm,
-        ),
-      );
-    })
-    .catch(() => {
-      console.log(`error getting ${resourceName}`);
-    });
 }
 
 function filter(resources: KubernetesObject[], searchTerm: string): KubernetesObject[] {

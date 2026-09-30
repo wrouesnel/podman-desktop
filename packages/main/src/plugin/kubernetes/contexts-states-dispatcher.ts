@@ -28,11 +28,14 @@ import type { ApiSenderType } from '@podman-desktop/core-api/api-sender';
 
 import type { ContextHealthState } from './context-health-checker.js';
 import type { ContextPermissionResult } from './context-permissions-checker.js';
+import { resourcesNotificationThrottle } from './contexts-constants.js';
 import type { DispatcherEvent } from './contexts-dispatcher.js';
 import type { ContextsManagerExperimental } from './contexts-manager-experimental.js';
 
 export class ContextsStatesDispatcher implements IDisposable {
   #disposables: IDisposable[] = [];
+  // pending notifications, by channel
+  #throttleTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private manager: ContextsManagerExperimental,
@@ -95,11 +98,11 @@ export class ContextsStatesDispatcher implements IDisposable {
   }
 
   updateResourcesCount(): void {
-    this.apiSender.send(`kubernetes-resources-count`);
+    this.sendThrottled(`kubernetes-resources-count`);
   }
 
   updateActiveResourcesCount(): void {
-    this.apiSender.send(`kubernetes-active-resources-count`);
+    this.sendThrottled(`kubernetes-active-resources-count`);
   }
 
   getResourcesCount(): ResourceCount[] {
@@ -111,7 +114,25 @@ export class ContextsStatesDispatcher implements IDisposable {
   }
 
   updateResource(resourceName: string): void {
-    this.apiSender.send(`kubernetes-update-${resourceName}`);
+    this.sendThrottled(`kubernetes-update-${resourceName}`);
+  }
+
+  // sendThrottled sends a notification on the channel after a delay, if no notification is already pending
+  // on this channel. As the notifications do not contain data (the renderer fetches the data when receiving
+  // the notification), this groups the bursts of updates (informers send one update per resource when
+  // listing resources) in a single notification, while ensuring a notification is sent at a regular rate
+  // when updates are received continuously.
+  private sendThrottled(channel: string): void {
+    if (this.#throttleTimers.has(channel)) {
+      return;
+    }
+    this.#throttleTimers.set(
+      channel,
+      setTimeout(() => {
+        this.#throttleTimers.delete(channel);
+        this.apiSender.send(channel);
+      }, resourcesNotificationThrottle),
+    );
   }
 
   getResources(contextNames: string[], resourceName: string): KubernetesContextResources[] {
@@ -127,5 +148,9 @@ export class ContextsStatesDispatcher implements IDisposable {
       disposable.dispose();
     }
     this.#disposables = [];
+    for (const timer of this.#throttleTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.#throttleTimers.clear();
   }
 }

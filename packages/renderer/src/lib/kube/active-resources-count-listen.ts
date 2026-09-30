@@ -18,7 +18,10 @@
 
 import type { IDisposable, ResourceCount } from '@podman-desktop/core-api';
 
+import { createCoalescedRefresh } from './coalesced-refresh';
+
 // listenActiveResourcesCount listens the count of active resources
+// (a single fetch is running at a time, the events received while fetching are grouped in a single fetch)
 export async function listenActiveResourcesCount(
   callback: (activeResourcesCounts: ResourceCount[]) => void,
 ): Promise<IDisposable | undefined> {
@@ -26,28 +29,26 @@ export async function listenActiveResourcesCount(
     return;
   }
 
+  const refresher = createCoalescedRefresh(
+    () => window.kubernetesGetActiveResourcesCount(),
+    callback,
+    () => {
+      console.error(`error getting active resources counts`);
+    },
+  );
+
   const disposable = window.events.receive('kubernetes-active-resources-count', () => {
-    collectAndSendCount(callback);
+    refresher.refresh();
   });
 
-  collectAndSendCount(callback);
+  refresher.refresh();
 
   return {
     dispose: (): void => {
+      refresher.dispose();
       disposable.dispose();
     },
   };
-}
-
-function collectAndSendCount(callback: (activeResourcesCount: ResourceCount[]) => void): void {
-  window
-    .kubernetesGetActiveResourcesCount()
-    .then(result => {
-      callback(result);
-    })
-    .catch(() => {
-      console.error(`error getting active resources counts`);
-    });
 }
 
 async function isKubernetesExperimentalMode(): Promise<boolean> {

@@ -99,14 +99,16 @@ export class ResourceInformer<T extends KubernetesObject> implements Disposable 
     const internalInformer = this.getListWatch(this.#path, typedList);
     this.#informer = internalInformer;
 
-    this.#informer.on(UPDATE, (_obj: T) => {
+    this.#informer.on(UPDATE, (obj: T) => {
+      removeManagedFields(obj);
       this.#onCacheUpdated.fire({
         kubeconfig: this.#kubeConfig,
         resourceName: this.#pluralName,
         countChanged: false,
       });
     });
-    this.#informer.on(ADD, (_obj: T) => {
+    this.#informer.on(ADD, (obj: T) => {
+      removeManagedFields(obj);
       this.#onCacheUpdated.fire({
         kubeconfig: this.#kubeConfig,
         resourceName: this.#pluralName,
@@ -178,5 +180,15 @@ export class ResourceInformer<T extends KubernetesObject> implements Disposable 
 
   isOffline(): boolean {
     return this.#offline;
+  }
+}
+
+// removeManagedFields removes the managedFields from the metadata of the object, in place.
+// The informer calls the ADD and UPDATE callbacks with the object stored in the cache,
+// so this keeps the cache (and the data sent to the renderer) free of these verbose fields
+// (they are not needed by the UI, and can represent a large part of the size of the objects)
+function removeManagedFields(obj: KubernetesObject): void {
+  if (obj.metadata?.managedFields) {
+    delete obj.metadata.managedFields;
   }
 }

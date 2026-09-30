@@ -265,3 +265,86 @@ test('updated resources with filter', async () => {
     expect(callbackSpy).toHaveBeenCalledWith([newResource]);
   });
 });
+
+test('updates received while fetching are grouped in a single fetch', async () => {
+  vi.mocked(window.isExperimentalConfigurationEnabled).mockResolvedValue(true);
+  vi.mocked(window.kubernetesGetResources).mockReset();
+  vi.mocked(contexts).kubernetesContexts = writable([
+    { currentContext: true, name: 'ctx1', cluster: 'cluster1', user: 'user1' },
+  ]);
+  const resolvers: ((value: KubernetesContextResources[]) => void)[] = [];
+  vi.mocked(window.kubernetesGetResources).mockImplementation(async () => {
+    return new Promise(resolve => resolvers.push(resolve));
+  });
+  const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
+
+  const listener = await listenResources('resource2', {}, callbackSpy);
+  expect(window.kubernetesGetResources).toHaveBeenCalledTimes(1);
+
+  // a burst of updates while the first fetch is running
+  for (let i = 0; i < 100; i++) {
+    callbacks.get('kubernetes-update-resource2')?.();
+  }
+  expect(window.kubernetesGetResources).toHaveBeenCalledTimes(1);
+
+  const resource1 = { metadata: { name: 'res1' } };
+  resolvers[0]!([{ contextName: 'ctx1', items: [resource1] }]);
+  // a single fetch is done for the burst of updates
+  await vi.waitFor(() => expect(window.kubernetesGetResources).toHaveBeenCalledTimes(2));
+  expect(callbackSpy).toHaveBeenCalledWith([resource1]);
+
+  const resource2 = { metadata: { name: 'res2' } };
+  resolvers[1]!([{ contextName: 'ctx1', items: [resource1, resource2] }]);
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenLastCalledWith([resource1, resource2]));
+  expect(window.kubernetesGetResources).toHaveBeenCalledTimes(2);
+  listener?.dispose();
+});
+
+test('changing the search term does not fetch the resources again', async () => {
+  const searchTermStore = writable<string>('');
+  vi.mocked(window.isExperimentalConfigurationEnabled).mockResolvedValue(true);
+  vi.mocked(window.kubernetesGetResources).mockReset();
+  vi.mocked(contexts).kubernetesContexts = writable([
+    { currentContext: true, name: 'ctx1', cluster: 'cluster1', user: 'user1' },
+  ]);
+  const resource1 = { metadata: { name: 'res1' } };
+  const resource2 = { metadata: { name: 'res2' } };
+  vi.mocked(window.kubernetesGetResources).mockResolvedValue([{ contextName: 'ctx1', items: [resource1, resource2] }]);
+  const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
+
+  const listener = await listenResources('resource3', { searchTermStore }, callbackSpy);
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenCalledWith([resource1, resource2]));
+
+  searchTermStore.set('res2');
+  expect(callbackSpy).toHaveBeenLastCalledWith([resource2]);
+  expect(window.kubernetesGetResources).toHaveBeenCalledTimes(1);
+  listener?.dispose();
+});
+
+test('resources fetched for a previous context are ignored', async () => {
+  vi.mocked(window.isExperimentalConfigurationEnabled).mockResolvedValue(true);
+  vi.mocked(window.kubernetesGetResources).mockReset();
+  const contextsStore = writable([{ currentContext: true, name: 'ctx1', cluster: 'cluster1', user: 'user1' }]);
+  vi.mocked(contexts).kubernetesContexts = contextsStore;
+  const resolvers: ((value: KubernetesContextResources[]) => void)[] = [];
+  vi.mocked(window.kubernetesGetResources).mockImplementation(async () => {
+    return new Promise(resolve => resolvers.push(resolve));
+  });
+  const callbackSpy: Mock<(resoures: KubernetesObject[]) => void> = vi.fn();
+
+  const listener = await listenResources('resource4', {}, callbackSpy);
+  // the context changes while fetching the resources of ctx1
+  contextsStore.set([
+    { currentContext: false, name: 'ctx1', cluster: 'cluster1', user: 'user1' },
+    { currentContext: true, name: 'ctx2', cluster: 'cluster1', user: 'user1' },
+  ]);
+
+  resolvers[0]!([{ contextName: 'ctx1', items: [{ metadata: { name: 'res-ctx1' } }] }]);
+  await vi.waitFor(() => expect(window.kubernetesGetResources).toHaveBeenLastCalledWith(['ctx2'], 'resource4'));
+  expect(callbackSpy).not.toHaveBeenCalled();
+
+  const resourceCtx2 = { metadata: { name: 'res-ctx2' } };
+  resolvers[1]!([{ contextName: 'ctx2', items: [resourceCtx2] }]);
+  await vi.waitFor(() => expect(callbackSpy).toHaveBeenCalledWith([resourceCtx2]));
+  listener?.dispose();
+});

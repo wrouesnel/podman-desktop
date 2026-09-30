@@ -33,3 +33,6 @@ export const backoffLimitCurrentContext = 10_000;
 export const backoffJitter = 300;
 // the time to wait for any update on the data to dispatch before to send it
 export const dispatchTimeout = 100;
+// the minimal time between two notifications to the renderer that resources, or their counts, have been updated.
+// Updates received during this time are grouped in a single notification
+export const resourcesNotificationThrottle = 100;

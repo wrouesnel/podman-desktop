@@ -350,3 +350,33 @@ test('informer is stopped when disposed', async () => {
   informer.dispose();
   expect(stopMock).toHaveBeenCalled();
 });
+
+test('ResourceInformer should remove the managedFields of the resources in the cache', async () => {
+  const kc = new KubeConfig();
+  kc.loadFromOptions(kcWith2contexts);
+  const listFn = vi.fn();
+  const kubeconfig = new KubeConfigSingleContext(kc, contexts[0]!);
+  const items = [
+    {
+      metadata: {
+        name: 'res1',
+        namespace: 'ns1',
+        managedFields: [{ manager: 'kubectl', operation: 'Update' }],
+      },
+    },
+  ];
+  listFn.mockResolvedValue({ apiVersion: 'v8', items: items });
+  const informer = new ResourceInformer<MyResource>({
+    kubeconfig,
+    path: '/a/path',
+    listFn,
+    kind: 'MyResource',
+    plural: 'myresources',
+  });
+  const result = informer.start();
+  await vi.waitFor(() => {
+    expect(result.list()).toEqual([
+      { apiVersion: 'v8', kind: 'MyResource', metadata: { name: 'res1', namespace: 'ns1' } },
+    ]);
+  });
+});

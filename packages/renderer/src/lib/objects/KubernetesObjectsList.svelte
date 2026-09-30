@@ -57,13 +57,56 @@ let {
   emptySnippet,
 }: Props = $props();
 
-let resources = $state<{ [key: string]: KubernetesObject[] | undefined }>({});
+// raw state: the resources are replaced on each update, and must not be deeply proxied
+let resources = $state.raw<{ [key: string]: KubernetesObject[] | undefined }>({});
 let resourceListeners: (IDisposable | undefined)[] = [];
 let legacyUnsubscribers: Unsubscriber[] = [];
 
-const objects = $derived(
-  kinds.flatMap(kind => resources[kind.resource]?.map(object => kind.transformer(object)) ?? []),
-);
+// The UI objects built during the previous update, by resource and uid.
+// When a resource did not change (same resourceVersion), its UI object is reused,
+// so the table does not rebuild its row, and the row keeps its state (selection, ...)
+interface CachedUIObject {
+  transformer: Kind['transformer'];
+  resourceVersion: string;
+  ui: KubernetesObjectUI;
+}
+let uiObjectsCache = new Map<string, CachedUIObject>();
+
+function transform(kind: Kind, object: KubernetesObject, newCache: Map<string, CachedUIObject>): KubernetesObjectUI {
+  const uid = object.metadata?.uid;
+  const resourceVersion = object.metadata?.resourceVersion;
+  if (!uid || !resourceVersion) {
+    return kind.transformer(object);
+  }
+  const key = `${kind.resource}/${uid}`;
+  const cached = uiObjectsCache.get(key);
+  let ui: KubernetesObjectUI;
+  // objects marked as being deleted by an action are built again, so the status is reset if the deletion failed
+  if (
+    cached?.resourceVersion === resourceVersion &&
+    cached.transformer === kind.transformer &&
+    cached.ui.status !== 'DELETING'
+  ) {
+    ui = cached.ui;
+  } else {
+    ui = kind.transformer(object);
+    // keep the selection of the previous version of the object
+    if (cached && 'selected' in cached.ui && 'selected' in ui) {
+      ui.selected = cached.ui.selected;
+    }
+  }
+  newCache.set(key, { transformer: kind.transformer, resourceVersion, ui });
+  return ui;
+}
+
+const objects = $derived.by(() => {
+  const newCache = new Map<string, CachedUIObject>();
+  const result = kinds.flatMap(
+    kind => resources[kind.resource]?.map(object => transform(kind, object, newCache)) ?? [],
+  );
+  uiObjectsCache = newCache;
+  return result;
+});
 
 $effect(() => {
   kinds.forEach(kind => kind.legacySearchPatternStore.set(searchTerm));
@@ -79,7 +122,7 @@ onMount(async () => {
         },
         (updatedResources: KubernetesObject[]) => {
           started = true;
-          resources[kind.resource] = updatedResources;
+          resources = { ...resources, [kind.resource]: updatedResources };
         },
       ),
     );
@@ -90,7 +133,7 @@ onMount(async () => {
           return;
         }
         started = true;
-        resources[kind.resource] = o;
+        resources = { ...resources, [kind.resource]: o };
       }),
     );
   }
