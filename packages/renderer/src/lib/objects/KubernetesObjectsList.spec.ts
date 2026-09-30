@@ -32,6 +32,7 @@ import * as states from '/@/stores/kubernetes-contexts-state';
 
 import KubernetesObjectsList from './KubernetesObjectsList.svelte';
 import type { KubernetesNamespacedObjectUI } from './KubernetesObjectUI';
+import TestStatusActionColumn from './TestStatusActionColumn.svelte';
 
 vi.mock(import('/@/lib/kube/resources-listen'));
 vi.mock(import('/@/stores/kubernetes-contexts-state'));
@@ -89,6 +90,9 @@ async function renderList(): Promise<void> {
         renderMapping: (object): string => object.name,
         renderer: TableSimpleColumn,
       }),
+      new TableColumn<KubernetesNamespacedObjectUI>('Status', {
+        renderer: TestStatusActionColumn,
+      }),
     ],
     row: new TableRow<KubernetesNamespacedObjectUI>({ selectable: (): boolean => true }),
     emptySnippet: createRawSnippet(() => ({ render: (): string => '<p>empty</p>' })),
@@ -127,14 +131,25 @@ test('the selection is kept when resources are updated', async () => {
   expect(screen.getByText('On 2 selected items.')).toBeInTheDocument();
 });
 
+test('changes done by actions on the objects are rendered', async () => {
+  await renderList();
+  sendResources([thing('a', '1'), thing('b', '1')]);
+  await vi.waitFor(() => expect(screen.getByRole('cell', { name: 'b' })).toBeInTheDocument());
+
+  await fireEvent.click(screen.getByRole('button', { name: 'delete a' }));
+  expect(screen.getAllByText('status:DELETING')).toHaveLength(1);
+});
+
 test('resources being deleted are transformed again on update', async () => {
   await renderList();
   sendResources([thing('a', '1')]);
   await vi.waitFor(() => expect(screen.getByRole('cell', { name: 'a' })).toBeInTheDocument());
-  const ui = transformer.mock.results[0]!.value as KubernetesNamespacedObjectUI;
-  ui.status = 'DELETING';
+  await fireEvent.click(screen.getByRole('button', { name: 'delete a' }));
+  expect(screen.getByText('status:DELETING')).toBeInTheDocument();
 
+  // the resource did not change (the deletion failed): its status is computed again
   sendResources([thing('a', '1')]);
   await tick();
   expect(transformer).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText('status:DELETING')).not.toBeInTheDocument();
 });

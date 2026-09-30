@@ -64,7 +64,8 @@ let legacyUnsubscribers: Unsubscriber[] = [];
 
 // The UI objects built during the previous update, by resource and uid.
 // When a resource did not change (same resourceVersion), its UI object is reused,
-// so the table does not rebuild its row, and the row keeps its state (selection, ...)
+// so the table does not render its row again, and the row keeps its state (selection, ...).
+// The UI objects are reactive, so the changes done by the actions (status, ...) are rendered.
 interface CachedUIObject {
   transformer: Kind['transformer'];
   resourceVersion: string;
@@ -72,11 +73,21 @@ interface CachedUIObject {
 }
 let uiObjectsCache = new Map<string, CachedUIObject>();
 
+function createUIObject(kind: Kind, object: KubernetesObject, previous?: KubernetesObjectUI): KubernetesObjectUI {
+  const ui = kind.transformer(object);
+  // keep the selection of the previous version of the object
+  if (previous && 'selected' in previous && 'selected' in ui) {
+    ui.selected = previous.selected;
+  }
+  const reactiveUI = $state(ui);
+  return reactiveUI;
+}
+
 function transform(kind: Kind, object: KubernetesObject, newCache: Map<string, CachedUIObject>): KubernetesObjectUI {
   const uid = object.metadata?.uid;
   const resourceVersion = object.metadata?.resourceVersion;
   if (!uid || !resourceVersion) {
-    return kind.transformer(object);
+    return createUIObject(kind, object);
   }
   const key = `${kind.resource}/${uid}`;
   const cached = uiObjectsCache.get(key);
@@ -89,11 +100,7 @@ function transform(kind: Kind, object: KubernetesObject, newCache: Map<string, C
   ) {
     ui = cached.ui;
   } else {
-    ui = kind.transformer(object);
-    // keep the selection of the previous version of the object
-    if (cached && 'selected' in cached.ui && 'selected' in ui) {
-      ui.selected = cached.ui.selected;
-    }
+    ui = createUIObject(kind, object, cached?.ui);
   }
   newCache.set(key, { transformer: kind.transformer, resourceVersion, ui });
   return ui;

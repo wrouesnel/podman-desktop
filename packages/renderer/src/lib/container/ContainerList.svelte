@@ -12,6 +12,7 @@ import {
 } from '@podman-desktop/ui-svelte';
 import { ContainerIcon } from '@podman-desktop/ui-svelte/icons';
 import moment from 'moment';
+import { SvelteMap } from 'svelte/reactivity';
 import { router } from 'tinro';
 
 import { withBulkConfirmation } from '/@/lib/actions/BulkActions';
@@ -68,6 +69,24 @@ let providerConnections = $derived(
     .filter(providerContainerConnection => providerContainerConnection.status === 'started'),
 );
 
+// The status of the pod groups being processed by a bulk action, by pod group key.
+// The table renders a row again only when its object changes: the status is applied when computing the groups,
+// instead of being set on the group objects
+const bulkActionPodGroupsStatus = new SvelteMap<string, string>();
+
+function getPodGroupKey(podGroup: ContainerGroupInfoUI): string {
+  return `${podGroup.engineId}:${podGroup.id}`;
+}
+
+function setPodGroupsStatus(podGroups: ContainerGroupInfoUI[], status: string): void {
+  podGroups.forEach(podGroup => bulkActionPodGroupsStatus.set(getPodGroupKey(podGroup), status));
+}
+
+// at the end of a bulk action, the status of the pod groups is computed again from the containers
+function clearPodGroupsStatus(podGroups: ContainerGroupInfoUI[]): void {
+  podGroups.forEach(podGroup => bulkActionPodGroupsStatus.delete(getPodGroupKey(podGroup)));
+}
+
 // filter containers by group type pod
 function filterContainersByGroupTypePod(): ContainerGroupInfoUI[] {
   return containerGroups.filter(group => group.type === ContainerGroupInfoTypeUI.POD).filter(pod => pod.selected);
@@ -92,7 +111,7 @@ async function deleteSelectedContainers(): Promise<void> {
 
   // mark pods and containers for deletion
   bulkDeleteInProgress = true;
-  podGroups.forEach(pod => (pod.status = 'DELETING'));
+  setPodGroupsStatus(podGroups, 'DELETING');
   selectedContainers.forEach(container => setContainerStatus(container.engineId, container.id, 'DELETING'));
 
   // delete pods first if any
@@ -127,6 +146,7 @@ async function deleteSelectedContainers(): Promise<void> {
       }),
     );
   }
+  clearPodGroupsStatus(podGroups);
   bulkDeleteInProgress = false;
 }
 
@@ -139,9 +159,8 @@ async function runSelectedContainers(): Promise<void> {
     return;
   }
   bulkRunInProgress = true;
-  podGroups.forEach(pod => {
-    if (pod.status !== 'RUNNING') pod.status = 'STARTING';
-  });
+  const podGroupsToStart = podGroups.filter(podGroup => podGroup.status !== 'RUNNING');
+  setPodGroupsStatus(podGroupsToStart, 'STARTING');
   selectedContainers.forEach(container => {
     if (container.state !== 'RUNNING') {
       setContainerStatus(container.engineId, container.id, 'STARTING');
@@ -149,13 +168,13 @@ async function runSelectedContainers(): Promise<void> {
   });
 
   // runs pods first if any
-  if (podGroups.length > 0) {
+  if (podGroupsToStart.length > 0) {
     await Promise.all(
-      podGroups.map(async podGroup => {
-        if (podGroup.engineId && podGroup.id && podGroup.status !== 'RUNNING') {
+      podGroupsToStart.map(async podGroup => {
+        if (podGroup.engineId && podGroup.id) {
           try {
             await window.startPod(podGroup.engineId, podGroup.id);
-            podGroup.status = 'RUNNING';
+            setPodGroupsStatus([podGroup], 'RUNNING');
           } catch (e) {
             console.error('error while running pod', e);
           }
@@ -186,6 +205,7 @@ async function runSelectedContainers(): Promise<void> {
       }),
     );
   }
+  clearPodGroupsStatus(podGroupsToStart);
   bulkRunInProgress = false;
 }
 
@@ -205,9 +225,7 @@ async function stopSelectedContainers(): Promise<void> {
 
   bulkStopInProgress = true;
   try {
-    podGroupsToStop.forEach(podGroup => {
-      podGroup.status = 'STOPPING';
-    });
+    setPodGroupsStatus(podGroupsToStop, 'STOPPING');
     containersToStop.forEach(container => {
       setContainerStatus(container.engineId, container.id, 'STOPPING');
     });
@@ -229,13 +247,13 @@ async function stopSelectedContainers(): Promise<void> {
       Promise.allSettled(containerStopPromises),
     ]);
 
-    podResults.forEach((result, index) => {
+    podResults.forEach(result => {
       if (result.status === 'rejected') {
         console.error('error while stopping pod', result.reason);
-        podGroupsToStop[index].status = 'RUNNING';
       }
     });
   } finally {
+    clearPodGroupsStatus(podGroupsToStop);
     bulkStopInProgress = false;
   }
 }
@@ -326,6 +344,13 @@ let containerGroups = $derived.by(() => {
   });
   // Remove groups with all containers filtered
   computedContainerGroups = computedContainerGroups.filter(group => group.containers.length > 0);
+
+  // apply the status set by the bulk actions
+  computedContainerGroups
+    .filter(group => group.type === ContainerGroupInfoTypeUI.POD)
+    .forEach(group => {
+      group.status = bulkActionPodGroupsStatus.get(getPodGroupKey(group)) ?? group.status;
+    });
 
   // update selected items based on previously selected items
   computedContainerGroups.forEach(group => {
