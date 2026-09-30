@@ -2314,6 +2314,13 @@ export function initExposure(): void {
     return ipcInvoke('kubernetes-client:deleteJob', name);
   });
 
+  contextBridge.exposeInMainWorld(
+    'kubernetesDeleteResource',
+    async (apiVersion: string, kind: string, name: string, namespace?: string): Promise<void> => {
+      return ipcInvoke('kubernetes-client:deleteResource', apiVersion, kind, name, namespace);
+    },
+  );
+
   contextBridge.exposeInMainWorld('kubernetesDeletePersistentVolumeClaim', async (name: string): Promise<void> => {
     return ipcInvoke('kubernetes-client:deletePersistentVolumeClaim', name);
   });

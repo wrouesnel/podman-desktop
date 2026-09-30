@@ -2638,6 +2638,48 @@ test('expect deleteJob to be called if there IS an active connection', async () 
   expect(deleteJobMock).toBeCalled();
 });
 
+test('expect deleteResource to not be called if there is no active connection', async () => {
+  const client = createTestClient('default');
+  const deleteMock = vi.fn();
+  vi.spyOn(client, 'checkConnection').mockResolvedValue(false);
+  makeApiClientMock.mockReturnValue({
+    delete: deleteMock,
+  });
+
+  await client.deleteResource('apps/v1', 'StatefulSet', 'name', 'ns1');
+  expect(deleteMock).not.toBeCalled();
+});
+
+test('expect deleteResource to delete the namespaced resource if there IS an active connection', async () => {
+  const client = createTestClient('default');
+  const deleteMock = vi.fn();
+  makeApiClientMock.mockReturnValue({
+    delete: deleteMock,
+  });
+  vi.spyOn(client, 'checkConnection').mockResolvedValue(true);
+  await client.deleteResource('apps/v1', 'StatefulSet', 'name', 'ns1');
+  expect(deleteMock).toHaveBeenCalledWith({
+    apiVersion: 'apps/v1',
+    kind: 'StatefulSet',
+    metadata: { name: 'name', namespace: 'ns1' },
+  });
+});
+
+test('expect deleteResource to delete the non-namespaced resource', async () => {
+  const client = createTestClient('default');
+  const deleteMock = vi.fn();
+  makeApiClientMock.mockReturnValue({
+    delete: deleteMock,
+  });
+  vi.spyOn(client, 'checkConnection').mockResolvedValue(true);
+  await client.deleteResource('v1', 'PersistentVolume', 'pv1');
+  expect(deleteMock).toHaveBeenCalledWith({
+    apiVersion: 'v1',
+    kind: 'PersistentVolume',
+    metadata: { name: 'pv1', namespace: undefined },
+  });
+});
+
 test('expect readNamespacedJob to return the job', async () => {
   const client = createTestClient('default');
   const v1Job: V1Job = {

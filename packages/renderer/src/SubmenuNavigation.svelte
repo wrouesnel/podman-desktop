@@ -14,6 +14,12 @@ interface Props {
 
 let { title, items, link, meta }: Props = $props();
 
+// an item is selected when the url is the item link or a sub-path of it
+// (do not use a simple prefix check, as /kubernetes/resources/roles is a prefix of /kubernetes/resources/rolebindings)
+function isSelected(url: string, itemLink: string): boolean {
+  return url === itemLink || url.startsWith(`${itemLink}/`) || url.startsWith(`${itemLink}?`);
+}
+
 let pages = $lastSubmenuPages;
 if (!pages[title]) {
   pages[title] = link;
@@ -34,7 +40,7 @@ if (!pages[title]) {
   </div>
   <div class="h-full overflow-y-auto" style="margin-bottom:auto">
     {#each items ?? [] as item, index (index)}
-      <SettingsNavItem title={item.tooltip} href={item.link} selected={meta.url.startsWith(item.link)} onClick={(): string => pages[title] = item.link}
+      <SettingsNavItem title={item.tooltip} href={item.link} selected={isSelected(meta.url, item.link)} onClick={(): string => pages[title] = item.link}
       ></SettingsNavItem>
     {/each}
   </div>

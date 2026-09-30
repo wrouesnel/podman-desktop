@@ -60,6 +60,7 @@ export * from './kubernetes-informer-info.js';
 export * from './kubernetes-navigation.js';
 export * from './kubernetes-port-forward-model.js';
 export * from './kubernetes-resource-count.js';
+export * from './kubernetes-resource-types.js';
 export * from './kubernetes-resources.js';
 export * from './kubernetes-troubleshooting.js';
 export * from './list-organizer.js';

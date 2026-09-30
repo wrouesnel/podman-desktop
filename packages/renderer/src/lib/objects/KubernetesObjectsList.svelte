@@ -19,7 +19,8 @@ export interface Kind {
   resource: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   transformer: (o: KubernetesObject) => KubernetesObjectUI;
-  delete: (name: string) => Promise<void>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  delete: (name: string, object?: any) => Promise<void>;
   isResource: (o: KubernetesObject) => boolean;
   legacySearchPatternStore: Writable<string>;
   legacyObjectStore: Readable<KubernetesObject[]>;
@@ -36,13 +37,25 @@ interface Props {
   columns: TableColumn<any>[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   row: TableRow<any>;
+  // defaults to true for nodes only
+  hideNamespaceDropdown?: boolean;
 
   emptySnippet: Snippet;
 }
 
 let started = $state<boolean>(false);
 
-let { kinds, singular, plural, icon, searchTerm, columns, row, emptySnippet }: Props = $props();
+let {
+  kinds,
+  singular,
+  plural,
+  icon,
+  searchTerm,
+  columns,
+  row,
+  hideNamespaceDropdown = kinds[0]?.resource === 'nodes',
+  emptySnippet,
+}: Props = $props();
 
 let resources = $state<{ [key: string]: KubernetesObject[] | undefined }>({});
 let resourceListeners: (IDisposable | undefined)[] = [];
@@ -110,7 +123,7 @@ async function deleteSelectedObjects(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     selectedObjects.map(async (object: any) => {
       try {
-        await kinds.find(kind => kind.isResource(object))?.delete(object.name);
+        await kinds.find(kind => kind.isResource(object))?.delete(object.name, object);
       } catch (e) {
         console.error(`error while deleting ${singular}`, e);
       }
@@ -128,7 +141,7 @@ let selectedItemsNumber = $state<number>(0);
   {/snippet}
 
   {#snippet bottomAdditionalActions()}
-    {#if kinds[0].resource !== 'nodes'}
+    {#if !hideNamespaceDropdown}
       <NamespaceDropdown/>
     {/if}
     {#if selectedItemsNumber > 0}

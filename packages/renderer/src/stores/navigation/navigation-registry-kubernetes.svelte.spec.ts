@@ -18,11 +18,13 @@
 
 import type { KubernetesObject } from '@kubernetes/client-node';
 import type { ContextGeneralState, ForwardConfig } from '@podman-desktop/core-api';
+import { GENERIC_KUBERNETES_RESOURCE_TYPES } from '@podman-desktop/core-api';
 import { readable, writable } from 'svelte/store';
 import { beforeEach, expect, test, vi } from 'vitest';
 
 import KubeIcon from '/@/lib/images/KubeIcon.svelte';
 import * as kubeContextStore from '/@/stores/kubernetes-contexts-state';
+import { isKubernetesExperimentalModeStore } from '/@/stores/kubernetes-experimental';
 import * as kubernetesNoCurrentContext from '/@/stores/kubernetes-no-current-context';
 
 import { createNavigationKubernetesGroup } from './navigation-registry-kubernetes.svelte';
@@ -34,6 +36,7 @@ vi.mock(import('/@/stores/kubernetes-no-current-context'));
 
 beforeEach(() => {
   vi.resetAllMocks();
+  isKubernetesExperimentalModeStore.set(false);
   vi.mocked(kubernetesNoCurrentContext).kubernetesNoCurrentContext = writable(false);
 });
 
@@ -105,4 +108,31 @@ test('createNavigationImageEntry without current context', async () => {
   await vi.waitFor(() => {
     expect(entry.items?.length).toBe(0);
   });
+});
+
+test('createNavigationKubernetesGroup in experimental mode displays the generic resources', async () => {
+  vi.mocked(kubeContextStore).kubernetesCurrentContextState = readable<ContextGeneralState>({} as ContextGeneralState);
+  vi.mocked(kubeContextStore).kubernetesCurrentContextNodes = readable<KubernetesObject[]>([]);
+  vi.mocked(kubeContextStore).kubernetesCurrentContextCronJobs = readable<KubernetesObject[]>([]);
+  vi.mocked(kubeContextStore).kubernetesCurrentContextJobs = readable<KubernetesObject[]>([]);
+  vi.mocked(kubeContextStore).kubernetesCurrentContextDeployments = readable<KubernetesObject[]>([]);
+  vi.mocked(kubeContextStore).kubernetesCurrentContextPods = readable<KubernetesObject[]>([]);
+  vi.mocked(kubeContextStore).kubernetesCurrentContextServices = readable<KubernetesObject[]>([]);
+  vi.mocked(kubeContextStore).kubernetesCurrentContextIngresses = readable<KubernetesObject[]>([]);
+  vi.mocked(kubeContextStore).kubernetesCurrentContextRoutes = readable<KubernetesObject[]>([]);
+  vi.mocked(kubeContextStore).kubernetesCurrentContextConfigMaps = readable<KubernetesObject[]>([]);
+  vi.mocked(kubeContextStore).kubernetesCurrentContextSecrets = readable<KubernetesObject[]>([]);
+  vi.mocked(kubeContextStore).kubernetesCurrentContextPersistentVolumeClaims = readable<KubernetesObject[]>([]);
+  vi.mocked(kubeContextStore).kubernetesCurrentContextPortForwards = readable<ForwardConfig[]>([]);
+  isKubernetesExperimentalModeStore.set(true);
+
+  const entry = createNavigationKubernetesGroup();
+
+  await vi.waitFor(() => {
+    expect(entry.items?.length).toBe(11 + GENERIC_KUBERNETES_RESOURCE_TYPES.length);
+  });
+  const names = entry.items?.map(item => item.name);
+  // generic resources are displayed after the dedicated pages, Port Forwarding is kept last
+  expect(names?.[10]).toBe('StatefulSets');
+  expect(names?.at(-1)).toBe('Port Forwarding');
 });

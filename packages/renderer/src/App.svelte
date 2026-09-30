@@ -57,6 +57,8 @@ import KubePlayYAML from './lib/kube/KubePlayYAML.svelte';
 import KubernetesDashboard from './lib/kube/KubernetesDashboard.svelte';
 import KubePodDetails from './lib/kube/pods/PodDetails.svelte';
 import KubePodsList from './lib/kube/pods/PodsList.svelte';
+import KubeResourceDetails from './lib/kube-resources/KubeResourceDetails.svelte';
+import KubeResourceList from './lib/kube-resources/KubeResourceList.svelte';
 import PortForwardingList from './lib/kubernetes-port-forward/PortForwardingList.svelte';
 import ManifestDetails from './lib/manifest/ManifestDetails.svelte';
 import CreateNetwork from './lib/network/CreateNetwork.svelte';
@@ -442,6 +444,21 @@ tablePersistence.storage = new PodmanDesktopStoragePersist();
             let:meta
             navigationHint="details">
             <RouteDetails name={decodeURI(meta.params.name)} namespace={decodeURI(meta.params.namespace)} />
+          </Route>
+          <Route path="/kubernetes/resources/:resource" breadcrumb="Resources" let:meta navigationHint="root">
+            <KubeResourceList resource={decodeURIComponent(meta.params.resource)} />
+          </Route>
+          <Route
+            path="/kubernetes/resources/:resource/:name/:namespace/*"
+            breadcrumb="Resource Details"
+            let:meta
+            navigationHint="details">
+            {#key meta.params.resource + '/' + meta.params.name + '/' + meta.params.namespace}
+              <KubeResourceDetails
+                resource={decodeURIComponent(meta.params.resource)}
+                name={decodeURIComponent(meta.params.name)}
+                namespace={decodeURIComponent(meta.params.namespace)} />
+            {/key}
           </Route>
           <Route path="/kubernetes/portForward" breadcrumb="Port Forwarding" navigationHint="root">
             <PortForwardingList />

@@ -26,6 +26,7 @@ import type {
   ResourceCount,
   ResourceName,
 } from '@podman-desktop/core-api';
+import { GENERIC_KUBERNETES_RESOURCE_TYPES } from '@podman-desktop/core-api';
 
 import { Emitter } from '/@/plugin/events/emitter.js';
 
@@ -40,6 +41,7 @@ import { ContextsDispatcher } from './contexts-dispatcher.js';
 import { CronjobsResourceFactory } from './cronjobs-resource-factory.js';
 import { DeploymentsResourceFactory } from './deployments-resource-factory.js';
 import { EventsResourceFactory } from './events-resource-factory.js';
+import { GenericResourceFactory } from './generic-resource-factory.js';
 import { IngressesResourceFactory } from './ingresses-resource-factory.js';
 import { JobsResourceFactory } from './jobs-resource-factory.js';
 import type { KubeConfigSingleContext } from './kubeconfig-single-context.js';
@@ -120,6 +122,7 @@ export class ContextsManagerExperimental {
       new RoutesResourceFactory(),
       new SecretsResourceFactory(),
       new ServicesResourceFactory(),
+      ...GENERIC_KUBERNETES_RESOURCE_TYPES.map(info => new GenericResourceFactory(info)),
     ];
   }
 

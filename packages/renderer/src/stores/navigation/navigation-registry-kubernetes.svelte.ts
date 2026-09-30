@@ -29,15 +29,28 @@ import { createNavigationKubernetesJobsEntry } from './kubernetes/navigation-reg
 import { createNavigationKubernetesNodesEntry } from './kubernetes/navigation-registry-k8s-nodes.svelte';
 import { createNavigationKubernetesPersistentVolumeEntry } from './kubernetes/navigation-registry-k8s-persistent-volume.svelte';
 import { createNavigationKubernetesPodsEntry } from './kubernetes/navigation-registry-k8s-pods.svelte';
+import { createNavigationKubernetesResourcesEntries } from './kubernetes/navigation-registry-k8s-resources.svelte';
 import { createNavigationKubernetesServicesEntry } from './kubernetes/navigation-registry-k8s-services.svelte';
 import type { NavigationRegistryEntry } from './navigation-registry';
 
 // All the items for the menu
 let kubernetesNavigationGroupItems: NavigationRegistryEntry[] = $state([]);
+// The items for the resource types displayed with the generic resource pages
+let kubernetesResourcesItems: { readonly entries: NavigationRegistryEntry[] } | undefined = $state();
+// The items displayed at the end of the menu
+let kubernetesNavigationGroupLastItems: NavigationRegistryEntry[] = $state([]);
 // Is there a Kubernetes context?
 let context = $state(true);
 // the items being returned to the caller, depending on the existence of a context
-const displayedItems = $derived(context ? kubernetesNavigationGroupItems : []);
+const displayedItems = $derived(
+  context
+    ? [
+        ...kubernetesNavigationGroupItems,
+        ...(kubernetesResourcesItems?.entries ?? []),
+        ...kubernetesNavigationGroupLastItems,
+      ]
+    : [],
+);
 
 export function createNavigationKubernetesGroup(): NavigationRegistryEntry {
   const newItems: NavigationRegistryEntry[] = [];
@@ -51,8 +64,9 @@ export function createNavigationKubernetesGroup(): NavigationRegistryEntry {
   newItems.push(createNavigationKubernetesConfigMapSecretsEntry());
   newItems.push(createNavigationKubernetesJobsEntry());
   newItems.push(createNavigationKubernetesCronJobsEntry());
-  newItems.push(createNavigationKubernetesPortForwardEntry());
   kubernetesNavigationGroupItems = newItems;
+  kubernetesResourcesItems = createNavigationKubernetesResourcesEntries();
+  kubernetesNavigationGroupLastItems = [createNavigationKubernetesPortForwardEntry()];
 
   kubernetesNoCurrentContext.subscribe(value => {
     context = !value;

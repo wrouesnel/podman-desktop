@@ -17,9 +17,22 @@
  ***********************************************************************/
 
 import type { KubernetesNavigationRequest } from '@podman-desktop/core-api';
+import { GENERIC_KUBERNETES_RESOURCE_TYPES } from '@podman-desktop/core-api';
 import { router } from 'tinro';
 
+import { getResourceDetailsURL, getResourceListURL } from '/@/lib/kube-resources/kube-resource-descriptor';
+
 export function navigateTo(nav: KubernetesNavigationRequest): void {
+  // kinds displayed with the generic resource pages
+  const genericType = GENERIC_KUBERNETES_RESOURCE_TYPES.find(info => info.kind === nav.kind);
+  if (genericType) {
+    router.goto(
+      nav.name
+        ? getResourceDetailsURL(genericType.resource, nav.name, genericType.namespaced ? nav.namespace : undefined)
+        : getResourceListURL(genericType.resource),
+    );
+    return;
+  }
   if (!nav.name) {
     // navigate to a kind (list)
     gotoKubernetesResources(nav.kind);

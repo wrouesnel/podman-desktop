@@ -82,3 +82,36 @@ test('set up and update lastSubmenuPages store for each submenu', async () => {
 
   expect(get(lastSubmenuPages)['page 1']).toBe('/page1');
 });
+
+test('an item is not selected when its link is only a prefix of the url', async () => {
+  const SettingsNavItemMock = vi.mocked(SettingsNavItem);
+  SettingsNavItemMock.mockClear();
+  render(SubmenuNavigation, {
+    title: 'A title',
+    items: [
+      {
+        tooltip: 'roles',
+        link: '/kubernetes/resources/roles',
+      } as unknown as NavigationRegistryEntry,
+      {
+        tooltip: 'rolebindings',
+        link: '/kubernetes/resources/rolebindings',
+      } as unknown as NavigationRegistryEntry,
+    ],
+    meta: {
+      url: '/kubernetes/resources/rolebindings',
+    } as TinroRouteMeta,
+    link: '/kubernetes',
+  });
+
+  expect(SettingsNavItemMock).toHaveBeenNthCalledWith(
+    1,
+    expect.anything(),
+    expect.objectContaining({ selected: false }),
+  );
+  expect(SettingsNavItemMock).toHaveBeenNthCalledWith(
+    2,
+    expect.anything(),
+    expect.objectContaining({ selected: true }),
+  );
+});

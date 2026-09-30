@@ -141,3 +141,21 @@ test(`Test navigation to a Secret`, () => {
     '/kubernetes/configmapsSecrets/secret/dummy-name/dummy-ns/summary',
   );
 });
+
+test('Test navigation to StatefulSets', () => {
+  navigateTo({ kind: 'StatefulSet' });
+
+  expect(vi.mocked(router.goto)).toHaveBeenCalledWith('/kubernetes/resources/statefulsets');
+});
+
+test('Test navigation to a StatefulSet', () => {
+  navigateTo({ kind: 'StatefulSet', name: 'dummy-name', namespace: 'dummy-ns' });
+
+  expect(vi.mocked(router.goto)).toHaveBeenCalledWith('/kubernetes/resources/statefulsets/dummy-name/dummy-ns/summary');
+});
+
+test('Test navigation to a PersistentVolume', () => {
+  navigateTo({ kind: 'PersistentVolume', name: 'dummy-name' });
+
+  expect(vi.mocked(router.goto)).toHaveBeenCalledWith('/kubernetes/resources/persistentvolumes/dummy-name/_/summary');
+});

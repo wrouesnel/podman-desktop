@@ -860,6 +860,25 @@ export class KubernetesClient {
     }
   }
 
+  // deleteResource deletes any resource, identified by its apiVersion and kind, in the current context.
+  // namespace must be undefined for non-namespaced resources
+  async deleteResource(apiVersion: string, kind: string, name: string, namespace?: string): Promise<void> {
+    let telemetryOptions: Record<string, unknown> = { kind };
+    try {
+      // Delete only if there is a valid connection
+      const connected = await this.checkConnection();
+      if (connected) {
+        const client = this.kubeConfig.makeApiClient(KubernetesObjectApi);
+        await client.delete({ apiVersion, kind, metadata: { name, namespace } });
+      }
+    } catch (error) {
+      telemetryOptions = { ...telemetryOptions, error: error };
+      throw this.wrapK8sClientError(error);
+    } finally {
+      this.telemetry.track('kubernetesDeleteResource', telemetryOptions);
+    }
+  }
+
   async deleteSecret(name: string): Promise<void> {
     let telemetryOptions = {};
     try {

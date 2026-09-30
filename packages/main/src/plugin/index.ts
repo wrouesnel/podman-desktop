@@ -2805,6 +2805,13 @@ export class PluginSystem {
       return kubernetesClient.deleteJob(name);
     });
 
+    this.ipcHandle(
+      'kubernetes-client:deleteResource',
+      async (_listener, apiVersion: string, kind: string, name: string, namespace?: string): Promise<void> => {
+        return kubernetesClient.deleteResource(apiVersion, kind, name, namespace);
+      },
+    );
+
     this.ipcHandle('kubernetes-client:deleteSecret', async (_listener, name: string): Promise<void> => {
       return kubernetesClient.deleteSecret(name);
     });
