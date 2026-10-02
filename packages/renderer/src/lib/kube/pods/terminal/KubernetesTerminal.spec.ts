@@ -50,6 +50,8 @@ test('Test should render the terminal and being able to reconnect', async () => 
   const sendCallbackId = 1;
   kubernetesExecMock.mockImplementation(
     (
+      _sessionKey: string,
+      _namespace: string | undefined,
       _podName: string,
       _containerName: string,
       onStdOut: (data: Buffer) => void,

@@ -1260,7 +1260,15 @@ test('Test should exec into container ', async () => {
     },
   );
 
-  const execResp = await client.execIntoContainer('test-pod', 'test-container', onStdOutFn, onStdErrFn, onCloseFn);
+  const execResp = await client.execIntoContainer(
+    'session1',
+    undefined,
+    'test-pod',
+    'test-container',
+    onStdOutFn,
+    onStdErrFn,
+    onCloseFn,
+  );
 
   expect(stdout).toBe('stdOut output');
   expect(stderr).toBe('stdErr output');
@@ -1295,9 +1303,97 @@ test('Test should exec into container only once', async () => {
     },
   );
 
-  await client.execIntoContainer('test-pod', 'test-container', onStdOutFn, onStdErrFn, onCloseFn);
-  await client.execIntoContainer('test-pod', 'test-container', onStdOutFn, onStdErrFn, onCloseFn);
+  await client.execIntoContainer(
+    'session1',
+    undefined,
+    'test-pod',
+    'test-container',
+    onStdOutFn,
+    onStdErrFn,
+    onCloseFn,
+  );
+  await client.execIntoContainer(
+    'session1',
+    undefined,
+    'test-pod',
+    'test-container',
+    onStdOutFn,
+    onStdErrFn,
+    onCloseFn,
+  );
   expect(execMock).toHaveBeenCalledOnce();
+});
+
+describe('exec sessions', () => {
+  // a fake websocket, firing its 'close' listeners when closed
+  function fakeConnection(): { on: Mock; close: Mock } {
+    const listeners: (() => void)[] = [];
+    const conn = {
+      on: vi.fn((event: string, listener: () => void) => {
+        if (event === 'close') {
+          listeners.push(listener);
+        }
+      }),
+      close: vi.fn(() => listeners.forEach(listener => listener())),
+    };
+    return conn;
+  }
+
+  test('several sessions can be opened in the same container, in the given namespace', async () => {
+    const client = createTestClient('default');
+    vi.spyOn(client, 'checkConnection').mockResolvedValue(true);
+    execMock.mockReturnValue(fakeConnection());
+
+    await client.execIntoContainer('session1', 'ns1', 'test-pod', 'test-container', vi.fn(), vi.fn(), vi.fn());
+    await client.execIntoContainer('session2', 'ns1', 'test-pod', 'test-container', vi.fn(), vi.fn(), vi.fn());
+    expect(execMock).toHaveBeenCalledTimes(2);
+    expect(execMock).toHaveBeenCalledWith(
+      'ns1',
+      'test-pod',
+      'test-container',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      true,
+      expect.any(Function),
+    );
+  });
+
+  test('the close of the connection is notified to the last attached client', async () => {
+    const client = createTestClient('default');
+    vi.spyOn(client, 'checkConnection').mockResolvedValue(true);
+    const conn = fakeConnection();
+    execMock.mockReturnValue(conn);
+    const firstOnClose = vi.fn();
+    const secondOnClose = vi.fn();
+
+    await client.execIntoContainer('session1', 'ns1', 'test-pod', 'test-container', vi.fn(), vi.fn(), firstOnClose);
+    await client.execIntoContainer('session1', 'ns1', 'test-pod', 'test-container', vi.fn(), vi.fn(), secondOnClose);
+    conn.close();
+
+    expect(firstOnClose).not.toHaveBeenCalled();
+    expect(secondOnClose).toHaveBeenCalledOnce();
+  });
+
+  test('closeExec closes the session without notifying the client', async () => {
+    const client = createTestClient('default');
+    vi.spyOn(client, 'checkConnection').mockResolvedValue(true);
+    const conn = fakeConnection();
+    execMock.mockReturnValue(conn);
+    const onClose = vi.fn();
+
+    await client.execIntoContainer('session1', 'ns1', 'test-pod', 'test-container', vi.fn(), vi.fn(), onClose);
+    client.closeExec('session1');
+
+    expect(conn.close).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+    // a new session is opened for the same key
+    await client.execIntoContainer('session1', 'ns1', 'test-pod', 'test-container', vi.fn(), vi.fn(), onClose);
+    expect(execMock).toHaveBeenCalledTimes(2);
+    // closing an unknown session does nothing
+    client.closeExec('unknown');
+  });
 });
 
 test('Test should throw an exception during exec command if resize parameters are wrong', async () => {
@@ -1305,6 +1401,8 @@ test('Test should throw an exception during exec command if resize parameters ar
   vi.spyOn(client, 'checkConnection').mockResolvedValue(true);
 
   const execResp = await client.execIntoContainer(
+    'session1',
+    undefined,
     'test-pod',
     'test-container',
     () => {},
@@ -1324,6 +1422,8 @@ test('Test should throw an exception during exec command if internal kube method
 
   await expect(
     client.execIntoContainer(
+      'session1',
+      undefined,
       'test-pod',
       'test-container',
       () => {},

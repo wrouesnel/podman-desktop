@@ -2363,9 +2363,12 @@ export function initExposure(): void {
     number,
     { onStdOut: (data: Buffer) => void; onStdErr: (data: Buffer) => void; onClose: () => void }
   >();
+  // opens an interactive shell in a container, or reattaches to the session `sessionKey` if it is still open
   contextBridge.exposeInMainWorld(
     'kubernetesExec',
     async (
+      sessionKey: string,
+      namespace: string | undefined,
       podName: string,
       containerName: string,
       onStdOut: (data: Buffer) => void,
@@ -2374,9 +2377,27 @@ export function initExposure(): void {
     ): Promise<number> => {
       kubernetesCallbackId++;
       kubernetesCallbackMap.set(kubernetesCallbackId, { onStdOut, onStdErr, onClose });
-      return ipcInvoke('kubernetes-client:execIntoContainer', podName, containerName, kubernetesCallbackId);
+      return ipcInvoke(
+        'kubernetes-client:execIntoContainer',
+        sessionKey,
+        namespace,
+        podName,
+        containerName,
+        kubernetesCallbackId,
+      );
     },
   );
+
+  // stops receiving the output of a session, without closing it (it can be reattached with kubernetesExec)
+  contextBridge.exposeInMainWorld('kubernetesExecDetach', async (dataId: number): Promise<void> => {
+    kubernetesCallbackMap.delete(dataId);
+    return ipcInvoke('kubernetes-client:execIntoContainerDetach', dataId);
+  });
+
+  // closes the session `sessionKey`
+  contextBridge.exposeInMainWorld('kubernetesExecClose', async (sessionKey: string): Promise<void> => {
+    return ipcInvoke('kubernetes-client:execIntoContainerClose', sessionKey);
+  });
 
   contextBridge.exposeInMainWorld('kubernetesExecSend', async (dataId: number, content: string): Promise<void> => {
     return ipcInvoke('kubernetes-client:execIntoContainerSend', dataId, content);
@@ -2402,7 +2423,7 @@ export function initExposure(): void {
     const callback = kubernetesCallbackMap.get(kubernetesCallbackId);
     if (callback) {
       callback.onClose();
-      onDataCallbacksShellInContainer.delete(kubernetesCallbackId);
+      kubernetesCallbackMap.delete(kubernetesCallbackId);
     }
   });
 

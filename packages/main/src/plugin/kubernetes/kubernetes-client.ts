@@ -101,6 +101,7 @@ import { Uri } from '/@/plugin/types/uri.js';
 import { ContextsManager } from './contexts-manager.js';
 import { ContextsManagerExperimental } from './contexts-manager-experimental.js';
 import { ContextsStatesDispatcher } from './contexts-states-dispatcher.js';
+import { execCommand, type ExecCommandOptions, type ExecCommandResult } from './kubernetes-exec-command.js';
 import {
   BufferedStreamWriter,
   ExecStreamWriter,
@@ -208,9 +209,16 @@ export class KubernetesClient {
 
   #portForwardService?: KubernetesPortForwardService;
 
+  // interactive exec sessions, by session key (several sessions can be opened in the same container)
   #execs: Map<
     string,
-    { stdout: ExecStreamWriter; stderr: ExecStreamWriter; stdin: StringLineReader; conn: WebSocket }
+    {
+      stdout: ExecStreamWriter;
+      stderr: ExecStreamWriter;
+      stdin: StringLineReader;
+      conn: WebSocket;
+      onClose: () => void;
+    }
   > = new Map();
 
   #managerStarted: boolean = true;
@@ -1489,7 +1497,13 @@ export class KubernetesClient {
     this.#execs.clear();
   }
 
+  /**
+   * Opens an interactive shell in a container, or reattaches to the session `sessionKey` if it is still open
+   * (the output is then sent to the new callbacks).
+   */
   async execIntoContainer(
+    sessionKey: string,
+    namespace: string | undefined,
     podName: string,
     containerName: string,
     onStdOut: (data: Buffer) => void,
@@ -1499,19 +1513,17 @@ export class KubernetesClient {
     let stdin: StringLineReader;
     let stdout: ExecStreamWriter;
     let stderr: ExecStreamWriter;
-    const entry = this.#execs.get(`${podName}-${containerName}`);
+    const entry = this.#execs.get(sessionKey);
     if (entry) {
       stdin = entry.stdin;
       stdout = entry.stdout;
       stdout.delegate = new ResizableTerminalWriter(new BufferedStreamWriter(onStdOut));
       stderr = entry.stderr;
       stderr.delegate = new ResizableTerminalWriter(new BufferedStreamWriter(onStdErr));
-      entry.conn.on('close', () => {
-        onClose();
-      });
+      entry.onClose = onClose;
     } else {
       try {
-        const ns = this.getCurrentNamespace();
+        const ns = namespace ?? this.getCurrentNamespace();
         const connected = await this.checkConnection();
         if (!ns) {
           throw new Error('no active namespace');
@@ -1544,11 +1556,15 @@ export class KubernetesClient {
 
         //need to handle websocket idling, which causes the connection close which is not passed to the execution status
         //approx time for idling before closing socket is 15 minutes. code and reason are always undefined here.
+        const newEntry = { stdin, stdout, stderr, conn, onClose };
         conn.on('close', () => {
-          onClose();
-          this.#execs.delete(`${podName}-${containerName}`);
+          // the session may have been closed with closeExec: the client does not expect a notification
+          if (this.#execs.get(sessionKey) === newEntry) {
+            this.#execs.delete(sessionKey);
+            newEntry.onClose();
+          }
         });
-        this.#execs.set(`${podName}-${containerName}`, { stdin, stdout, stderr, conn });
+        this.#execs.set(sessionKey, newEntry);
       } catch (error) {
         throw this.wrapK8sClientError(error);
       }
@@ -1566,6 +1582,32 @@ export class KubernetesClient {
         ((stdout as ExecStreamWriter).delegate as ResizableTerminalWriter).resize({ width: columns, height: rows });
       },
     };
+  }
+
+  // closes the interactive session `sessionKey`, if it is open
+  closeExec(sessionKey: string): void {
+    const entry = this.#execs.get(sessionKey);
+    if (entry) {
+      this.#execs.delete(sessionKey);
+      entry.conn.close();
+    }
+  }
+
+  /**
+   * Executes a non interactive command in a container (see execCommand)
+   */
+  async execCommand(
+    namespace: string,
+    podName: string,
+    containerName: string,
+    command: string[],
+    options?: ExecCommandOptions,
+  ): Promise<ExecCommandResult> {
+    try {
+      return await execCommand(this.kubeConfig, namespace, podName, containerName, command, options);
+    } catch (error) {
+      throw this.wrapK8sClientError(error);
+    }
   }
 
   async restartPod(name: string): Promise<void> {

@@ -65,6 +65,8 @@ onDestroy(() => {
 function reconnect(): void {
   window
     .kubernetesExec(
+      `${podName}-${containerName}`,
+      undefined,
       podName,
       containerName,
       (data: Buffer) => {
@@ -112,6 +114,8 @@ async function initializeNewTerminal(container: HTMLElement): Promise<void> {
   });
 
   id = await window.kubernetesExec(
+    `${podName}-${containerName}`,
+    undefined,
     podName,
     containerName,
     (data: Buffer) => {

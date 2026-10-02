@@ -3091,8 +3091,17 @@ export class PluginSystem {
     >();
     this.ipcHandle(
       'kubernetes-client:execIntoContainer',
-      async (_listener, podName: string, containerName: string, onDataId: number): Promise<number> => {
+      async (
+        _listener,
+        sessionKey: string,
+        namespace: string | undefined,
+        podName: string,
+        containerName: string,
+        onDataId: number,
+      ): Promise<number> => {
         const execInvocation = await kubernetesClient.execIntoContainer(
+          sessionKey,
+          namespace,
           podName,
           containerName,
           (stdOut: Buffer) => {
@@ -3131,6 +3140,15 @@ export class PluginSystem {
         }
       },
     );
+
+    // the client does not listen anymore to the session (the session is kept open)
+    this.ipcHandle('kubernetes-client:execIntoContainerDetach', async (_listener, onDataId: number): Promise<void> => {
+      kubernetesExecCallbackMap.delete(onDataId);
+    });
+
+    this.ipcHandle('kubernetes-client:execIntoContainerClose', async (_listener, sessionKey: string): Promise<void> => {
+      kubernetesClient.closeExec(sessionKey);
+    });
 
     this.ipcHandle('kubernetes-client:refreshContextState', async (_listener, context: string): Promise<void> => {
       return kubernetesClient.refreshContextState(context);

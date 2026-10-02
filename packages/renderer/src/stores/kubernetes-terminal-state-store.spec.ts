@@ -37,6 +37,8 @@ test('Test should check saved terminal state after destroying terminal window', 
   const sendCallbackId = 1;
   vi.mocked(window.kubernetesExec).mockImplementation(
     (
+      _sessionKey: string,
+      _namespace: string | undefined,
       _podName: string,
       _containerName: string,
       _: (data: Buffer) => void,
