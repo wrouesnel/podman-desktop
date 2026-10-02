@@ -98,6 +98,7 @@ import { KubernetesPortForwardServiceProvider } from '/@/plugin/kubernetes/kuber
 import { Telemetry } from '/@/plugin/telemetry/telemetry.js';
 import { Uri } from '/@/plugin/types/uri.js';
 
+import { checkResourceVersion, setConfigMapKey, setSecretKey } from './config-data.js';
 import { ContextsManager } from './contexts-manager.js';
 import { ContextsManagerExperimental } from './contexts-manager-experimental.js';
 import { ContextsStatesDispatcher } from './contexts-states-dispatcher.js';
@@ -1142,6 +1143,50 @@ export class KubernetesClient {
       return res;
     } catch (error) {
       this.telemetry.track('kubernetesReadNamespacedSecret.error', error);
+      throw this.wrapK8sClientError(error);
+    }
+  }
+
+  /**
+   * Sets the value (base64 encoded) of a key of a ConfigMap; fails if the ConfigMap has been modified since
+   * `resourceVersion`
+   */
+  async updateConfigMapKey(
+    name: string,
+    namespace: string,
+    key: string,
+    base64Value: string,
+    resourceVersion?: string,
+  ): Promise<V1ConfigMap> {
+    const k8sApi = this.kubeConfig.makeApiClient(CoreV1Api);
+    try {
+      const configMap = await k8sApi.readNamespacedConfigMap({ name, namespace });
+      checkResourceVersion(configMap, 'ConfigMap', resourceVersion);
+      const body = setConfigMapKey(configMap, key, base64Value);
+      return await k8sApi.replaceNamespacedConfigMap({ name, namespace, body });
+    } catch (error) {
+      throw this.wrapK8sClientError(error);
+    }
+  }
+
+  /**
+   * Sets the value (base64 encoded) of a key of a Secret; fails if the Secret has been modified since
+   * `resourceVersion`
+   */
+  async updateSecretKey(
+    name: string,
+    namespace: string,
+    key: string,
+    base64Value: string,
+    resourceVersion?: string,
+  ): Promise<V1Secret> {
+    const k8sApi = this.kubeConfig.makeApiClient(CoreV1Api);
+    try {
+      const secret = await k8sApi.readNamespacedSecret({ name, namespace });
+      checkResourceVersion(secret, 'Secret', resourceVersion);
+      const body = setSecretKey(secret, key, base64Value);
+      return await k8sApi.replaceNamespacedSecret({ name, namespace, body });
+    } catch (error) {
       throw this.wrapK8sClientError(error);
     }
   }

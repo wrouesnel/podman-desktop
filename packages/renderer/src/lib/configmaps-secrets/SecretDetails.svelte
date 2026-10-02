@@ -19,6 +19,7 @@ import { kubernetesCurrentContextSecrets } from '/@/stores/kubernetes-contexts-s
 import { ConfigMapSecretUtils } from './configmap-secret-utils';
 import ConfigMapSecretActions from './ConfigMapSecretActions.svelte';
 import type { ConfigMapSecretUI } from './ConfigMapSecretUI';
+import ConfigDataEditor from './data/ConfigDataEditor.svelte';
 import SecretDetailsSummary from './SecretDetailsSummary.svelte';
 
 interface Props {
@@ -90,12 +91,16 @@ async function loadDetails(): Promise<void> {
     {/snippet}
     {#snippet tabsSnippet()}
       <Tab title="Summary" selected={isTabSelected($router.path, 'summary')} url={getTabUrl($router.path, 'summary')} />
+      <Tab title="Data" selected={isTabSelected($router.path, 'data')} url={getTabUrl($router.path, 'data')} />
       <Tab title="Inspect" selected={isTabSelected($router.path, 'inspect')} url={getTabUrl($router.path, 'inspect')} />
       <Tab title="Kube" selected={isTabSelected($router.path, 'kube')} url={getTabUrl($router.path, 'kube')} />
     {/snippet}
     {#snippet contentSnippet()}
       <Route path="/summary" breadcrumb="Summary" navigationHint="tab">
         <SecretDetailsSummary secret={kubeSecret} kubeError={kubeError} />
+      </Route>
+      <Route path="/data" breadcrumb="Data" navigationHint="tab">
+        <ConfigDataEditor kind="Secret" resource={kubeSecret} />
       </Route>
       <Route path="/inspect" breadcrumb="Inspect" navigationHint="tab">
         <MonacoEditor content={JSON.stringify(kubeSecret, undefined, 2)} language="json" />

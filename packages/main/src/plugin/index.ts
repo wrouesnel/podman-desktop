@@ -20,6 +20,7 @@
  * @module preload
  */
 import { EventEmitter } from 'node:events';
+import { readFile, stat } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -230,6 +231,7 @@ import { ImageCheckerImpl } from './image-checker.js';
 import { ImageFilesRegistry } from './image-files-registry.js';
 import { ImageRegistry } from './image-registry.js';
 import { InputQuickPickRegistry } from './input-quickpick/input-quickpick-registry.js';
+import { MAX_CONFIG_DATA_SIZE } from './kubernetes/config-data.js';
 import { KubernetesClient } from './kubernetes/kubernetes-client.js';
 import { getDragIcon } from './kubernetes/pvc-browser/drag-icon.js';
 import {
@@ -2842,6 +2844,46 @@ export class PluginSystem {
 
     this.ipcHandle('kubernetes-client:deleteService', async (_listener, name: string): Promise<void> => {
       return kubernetesClient.deleteService(name);
+    });
+
+    this.ipcHandle(
+      'kubernetes-client:updateConfigMapKey',
+      async (
+        _listener,
+        name: string,
+        namespace: string,
+        key: string,
+        base64Value: string,
+        resourceVersion?: string,
+      ): Promise<V1ConfigMap> => {
+        return kubernetesClient.updateConfigMapKey(name, namespace, key, base64Value, resourceVersion);
+      },
+    );
+
+    this.ipcHandle(
+      'kubernetes-client:updateSecretKey',
+      async (
+        _listener,
+        name: string,
+        namespace: string,
+        key: string,
+        base64Value: string,
+        resourceVersion?: string,
+      ): Promise<V1Secret> => {
+        return kubernetesClient.updateSecretKey(name, namespace, key, base64Value, resourceVersion);
+      },
+    );
+
+    // the content of a local file (base64 encoded), to be set as the value of a ConfigMap or Secret key
+    this.ipcHandle('kubernetes-client:readConfigDataFile', async (_listener, filePath: string): Promise<string> => {
+      const stats = await stat(filePath);
+      if (!stats.isFile()) {
+        throw new Error(`${path.basename(filePath)} is not a file`);
+      }
+      if (stats.size > MAX_CONFIG_DATA_SIZE) {
+        throw new Error(`${path.basename(filePath)} is too large (the limit is 1 MiB)`);
+      }
+      return (await readFile(filePath)).toString('base64');
     });
 
     this.ipcHandle(

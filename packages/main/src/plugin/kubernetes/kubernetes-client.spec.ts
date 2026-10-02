@@ -2857,3 +2857,40 @@ test('useInternalKubernetes configuration is set to true when internal manager i
   await client.KubernetesManagerStart();
   expect(configurationRegistry.updateConfigurationValue).toHaveBeenCalledWith('kubernetes.useInternalKubernetes', true);
 });
+
+describe('update of ConfigMap and Secret keys', () => {
+  test('updateConfigMapKey replaces the ConfigMap with the new value', async () => {
+    const client = createTestClient('default');
+    const replaceNamespacedConfigMap = vi.fn().mockImplementation(async ({ body }) => body);
+    makeApiClientMock.mockReturnValue({
+      readNamespacedConfigMap: vi.fn().mockResolvedValue({
+        metadata: { name: 'cm', resourceVersion: '3' },
+        data: { a: 'old' },
+      }),
+      replaceNamespacedConfigMap,
+    });
+
+    const result = await client.updateConfigMapKey('cm', 'ns1', 'a', Buffer.from('new').toString('base64'), '3');
+
+    expect(replaceNamespacedConfigMap).toHaveBeenCalledWith({
+      name: 'cm',
+      namespace: 'ns1',
+      body: { metadata: { name: 'cm', resourceVersion: '3' }, data: { a: 'new' }, binaryData: undefined },
+    });
+    expect(result.data).toEqual({ a: 'new' });
+  });
+
+  test('updateSecretKey fails when the Secret has been modified', async () => {
+    const client = createTestClient('default');
+    const replaceNamespacedSecret = vi.fn();
+    makeApiClientMock.mockReturnValue({
+      readNamespacedSecret: vi.fn().mockResolvedValue({ metadata: { name: 's', resourceVersion: '4' }, data: {} }),
+      replaceNamespacedSecret,
+    });
+
+    await expect(client.updateSecretKey('s', 'ns1', 'a', 'eA==', '3')).rejects.toThrow(
+      'the Secret s has been modified since it was opened',
+    );
+    expect(replaceNamespacedSecret).not.toHaveBeenCalled();
+  });
+});

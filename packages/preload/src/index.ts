@@ -2208,6 +2208,37 @@ export function initExposure(): void {
     },
   );
 
+  contextBridge.exposeInMainWorld(
+    'kubernetesUpdateConfigMapKey',
+    async (
+      name: string,
+      namespace: string,
+      key: string,
+      base64Value: string,
+      resourceVersion?: string,
+    ): Promise<V1ConfigMap> => {
+      return ipcInvoke('kubernetes-client:updateConfigMapKey', name, namespace, key, base64Value, resourceVersion);
+    },
+  );
+
+  contextBridge.exposeInMainWorld(
+    'kubernetesUpdateSecretKey',
+    async (
+      name: string,
+      namespace: string,
+      key: string,
+      base64Value: string,
+      resourceVersion?: string,
+    ): Promise<V1Secret> => {
+      return ipcInvoke('kubernetes-client:updateSecretKey', name, namespace, key, base64Value, resourceVersion);
+    },
+  );
+
+  // the content (base64 encoded) of a local file to set as the value of a ConfigMap or Secret key
+  contextBridge.exposeInMainWorld('kubernetesReadConfigDataFile', async (filePath: string): Promise<string> => {
+    return ipcInvoke('kubernetes-client:readConfigDataFile', filePath);
+  });
+
   contextBridge.exposeInMainWorld('kubernetesReadNode', async (name: string): Promise<V1Node | undefined> => {
     return ipcInvoke('kubernetes-client:readNode', name);
   });
