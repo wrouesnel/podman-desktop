@@ -1,6 +1,6 @@
 {
   "name": "renderer",
-  "version": "1.32.0+wrouesnel.1",
+  "version": "1.32.0+wrouesnel.2",
   "type": "module",
   "license": "Apache-2.0",
   "scripts": {
