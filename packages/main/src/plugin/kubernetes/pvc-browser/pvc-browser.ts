@@ -189,8 +189,18 @@ export class PvcBrowser {
         const volume = volumes.find(volume => volume.name === mount.name);
         const usable = await this.client
           .execCommand(namespace, podName, container.name, PROBE_COMMAND)
-          .then(result => result.exitCode === 0)
-          .catch(() => false);
+          .then(result => {
+            if (result.exitCode !== 0) {
+              console.warn(
+                `PVC browser: the container ${podName}/${container.name} lacks commands (exit code ${result.exitCode}): ${result.stderr}`,
+              );
+            }
+            return result.exitCode === 0;
+          })
+          .catch((error: unknown) => {
+            console.warn(`PVC browser: unable to execute commands in ${podName}/${container.name}`, error);
+            return false;
+          });
         if (usable) {
           return {
             mode: 'pod',
