@@ -16,6 +16,7 @@ import { getTabUrl, isTabSelected } from '/@/lib/ui/Util';
 import Route from '/@/Route.svelte';
 import { kubernetesCurrentContextPersistentVolumeClaims } from '/@/stores/kubernetes-contexts-state';
 
+import PVCFileBrowser from './files/PVCFileBrowser.svelte';
 import { PVCUtils } from './pvc-utils';
 import PVCActions from './PVCActions.svelte';
 import PVCDetailsSummary from './PVCDetailsSummary.svelte';
@@ -90,12 +91,16 @@ async function loadDetails(): Promise<void> {
     {/snippet}
     {#snippet tabsSnippet()}
       <Tab title="Summary" selected={isTabSelected($router.path, 'summary')} url={getTabUrl($router.path, 'summary')} />
+      <Tab title="Files" selected={isTabSelected($router.path, 'files')} url={getTabUrl($router.path, 'files')} />
       <Tab title="Inspect" selected={isTabSelected($router.path, 'inspect')} url={getTabUrl($router.path, 'inspect')} />
       <Tab title="Kube" selected={isTabSelected($router.path, 'kube')} url={getTabUrl($router.path, 'kube')} />
     {/snippet}
     {#snippet contentSnippet()}
       <Route path="/summary" breadcrumb="Summary" navigationHint="tab">
         <PVCDetailsSummary pvc={kubePVC} kubeError={kubeError} />
+      </Route>
+      <Route path="/files" breadcrumb="Files" navigationHint="tab">
+        <PVCFileBrowser name={name} namespace={namespace} />
       </Route>
       <Route path="/inspect" breadcrumb="Inspect" navigationHint="tab">
         <MonacoEditor content={JSON.stringify(kubePVC, undefined, 2)} language="json" />

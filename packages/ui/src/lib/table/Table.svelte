@@ -597,6 +597,8 @@ function handleRowKeyDown(object: T, event: KeyboardEvent): void {
           aria-rowindex={rowIndex}
           tabindex={isRowClickable(object) ? 0 : undefined}
           aria-label={label(object)}
+          draggable={row.info.draggable?.(object) ? 'true' : undefined}
+          data-row-key={row.info.draggable ? itemKey : undefined}
           onclick={(event): void => handleRowClick(object, event)}
           onkeydown={(event): void => handleRowKeyDown(object, event)}>
           <div

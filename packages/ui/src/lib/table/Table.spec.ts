@@ -1133,6 +1133,39 @@ describe('Table#rowClick', () => {
     expect(row).toHaveAttribute('tabindex', '0');
   });
 
+  test('draggable rows have the draggable attribute and their key', async () => {
+    const ROW = new Row<Item>({ draggable: (item: Item): boolean => item.name === 'Alice' });
+
+    const { getByRole } = render(Table<Item>, {
+      kind: 'row-draggable-test',
+      data: [...DATA, { id: '2', name: 'Bob', selected: false }],
+      columns: [NAME_COLUMN],
+      row: ROW,
+      key: (item: Item): string => item.id,
+      label: (item: Item): string => item.name,
+    });
+
+    const alice = getByRole('row', { name: 'Alice' });
+    expect(alice).toHaveAttribute('draggable', 'true');
+    expect(alice).toHaveAttribute('data-row-key', '1');
+    expect(getByRole('row', { name: 'Bob' })).not.toHaveAttribute('draggable');
+  });
+
+  test('rows are not draggable by default', async () => {
+    const { getByRole } = render(Table<Item>, {
+      kind: 'row-not-draggable-test',
+      data: DATA,
+      columns: [NAME_COLUMN],
+      row: new Row<Item>({}),
+      key: (item: Item): string => item.id,
+      label: (item: Item): string => item.name,
+    });
+
+    const alice = getByRole('row', { name: 'Alice' });
+    expect(alice).not.toHaveAttribute('draggable');
+    expect(alice).not.toHaveAttribute('data-row-key');
+  });
+
   test('non-clickable row is not keyboard focusable', async () => {
     const ROW = new Row<Item>({
       onClick: vi.fn(),

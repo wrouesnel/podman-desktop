@@ -134,6 +134,12 @@ export interface RowInformation<Type, ChildType> {
    * Defaults to true when onClick is set.
    */
   readonly clickable?: (object: Type) => boolean;
+
+  /**
+   * Returns true if the row can be dragged (HTML drag and drop, the events are handled by the parent of the table).
+   * The row element has a `data-row-key` attribute with the key of the object.
+   */
+  readonly draggable?: (object: Type) => boolean;
 }
 
 /**
