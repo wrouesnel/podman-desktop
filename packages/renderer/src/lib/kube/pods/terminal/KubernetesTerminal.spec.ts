@@ -19,73 +19,114 @@
 import '@testing-library/jest-dom/vitest';
 
 import { render, waitFor } from '@testing-library/svelte';
-/* eslint-disable import/no-duplicates */
-import { tick } from 'svelte';
 import { get } from 'svelte/store';
-/* eslint-enable import/no-duplicates */
-import { beforeAll, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
 import KubernetesTerminal from '/@/lib/kube/pods/terminal/KubernetesTerminal.svelte';
 import { terminalStates } from '/@/stores/kubernetes-terminal-state-store';
 
-const getConfigurationValueMock = vi.fn();
-const kubernetesExecMock = vi.fn();
-const kubernetesExecResizeMock = vi.fn();
+type ExecArgs = [
+  string,
+  string | undefined,
+  string,
+  string,
+  (data: Buffer) => void,
+  (data: Buffer) => void,
+  () => void,
+];
 
-beforeAll(() => {
-  getConfigurationValueMock.mockImplementation((key: string) => {
-    if (key === 'terminal.integrated.scrollback') {
-      return 1000;
-    }
-    return undefined;
+let onStdOut: (data: Buffer) => void;
+let onClose: () => void;
+let resizeCallbacks: (() => void)[];
+const originalResizeObserver = globalThis.ResizeObserver;
+
+const props = { sessionKey: 'ns1/pod1/container1/1', namespace: 'ns1', podName: 'pod1', containerName: 'container1' };
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  terminalStates.set(new Map());
+  vi.mocked(window.getConfigurationValue).mockImplementation(async (key: string) =>
+    key === 'terminal.integrated.scrollback' ? 1000 : undefined,
+  );
+  let execCount = 0;
+  vi.mocked(window.kubernetesExec).mockImplementation(async (...args: ExecArgs) => {
+    onStdOut = args[4];
+    onClose = args[6];
+    execCount++;
+    return execCount;
   });
-  Object.defineProperty(window, 'getConfigurationValue', { value: getConfigurationValueMock });
-  Object.defineProperty(window, 'kubernetesExec', { value: kubernetesExecMock });
-  Object.defineProperty(window, 'kubernetesExecResize', { value: kubernetesExecResizeMock });
-  Object.defineProperty(window, 'kubernetesExecSend', { value: vi.fn().mockResolvedValue(undefined) });
+  vi.mocked(window.kubernetesExecSend).mockResolvedValue(undefined);
+  vi.mocked(window.kubernetesExecResize).mockResolvedValue(undefined);
+  vi.mocked(window.kubernetesExecDetach).mockResolvedValue(undefined);
+  // a ResizeObserver whose callbacks can be triggered by the tests
+  resizeCallbacks = [];
+  globalThis.ResizeObserver = class {
+    constructor(callback: () => void) {
+      resizeCallbacks.push(callback);
+    }
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  } as unknown as typeof ResizeObserver;
 });
 
-test('Test should render the terminal and being able to reconnect', async () => {
-  let onStdOutCallback: (data: Buffer) => void = () => {};
-  const sendCallbackId = 1;
-  kubernetesExecMock.mockImplementation(
-    (
-      _sessionKey: string,
-      _namespace: string | undefined,
-      _podName: string,
-      _containerName: string,
-      onStdOut: (data: Buffer) => void,
-      _onStdErr: (data: Buffer) => void,
-      _onClose: () => void,
-    ) => {
-      onStdOutCallback = onStdOut;
-      return sendCallbackId;
-    },
+afterEach(() => {
+  globalThis.ResizeObserver = originalResizeObserver;
+});
+
+test('opens the session in the namespace of the pod and displays its output', async () => {
+  const renderObject = render(KubernetesTerminal, props);
+  await waitFor(() => expect(window.kubernetesExec).toHaveBeenCalled());
+  expect(window.kubernetesExec).toHaveBeenCalledWith(
+    'ns1/pod1/container1/1',
+    'ns1',
+    'pod1',
+    'container1',
+    expect.any(Function),
+    expect.any(Function),
+    expect.any(Function),
   );
 
-  const renderObject = render(KubernetesTerminal, { podName: 'podName', containerName: 'containerName' });
-  await tick();
-  await waitFor(() => expect(kubernetesExecMock).toHaveBeenCalled());
-
-  onStdOutCallback(Buffer.from('hello\nworld'));
-
+  onStdOut(Buffer.from('hello\nworld'));
   await waitFor(() => {
     const terminalLinesLiveRegion = renderObject.container.querySelector('div[aria-live="assertive"]');
     expect(terminalLinesLiveRegion).toHaveTextContent('hello world');
   });
+});
 
-  const terminals = get(terminalStates);
-  expect(terminals.size).toBe(0);
+test('the session is detached (not closed) and its output saved when the terminal is destroyed', async () => {
+  const renderObject = render(KubernetesTerminal, props);
+  await waitFor(() => expect(window.kubernetesExec).toHaveBeenCalled());
+  expect(get(terminalStates).size).toBe(0);
 
   renderObject.unmount();
-  const terminalsAfterDestroy = get(terminalStates);
-  expect(terminalsAfterDestroy.size).toBe(1);
+  expect(window.kubernetesExecDetach).toHaveBeenCalledWith(1);
+  expect(window.kubernetesExecClose).not.toHaveBeenCalled();
+  expect(get(terminalStates).get('ns1/pod1/container1/1')?.terminal).toBeDefined();
 
-  render(KubernetesTerminal, { podName: 'podName', containerName: 'containerName' });
+  // a new terminal for the same session reattaches to it
+  render(KubernetesTerminal, props);
+  await waitFor(() => expect(window.kubernetesExec).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(window.kubernetesExec).mock.calls[1]?.[0]).toBe('ns1/pod1/container1/1');
+});
 
-  await waitFor(() => {
-    // Called twice because we now create the terminal each session when we reconnect in order
-    // to ensure that we have a fresh terminal with the previous history shown.
-    expect(kubernetesExecMock).toHaveBeenCalledTimes(2);
-  });
+test('a new shell is started when the shell exits', async () => {
+  render(KubernetesTerminal, props);
+  await waitFor(() => expect(window.kubernetesExec).toHaveBeenCalledOnce());
+  onClose();
+  await waitFor(() => expect(window.kubernetesExec).toHaveBeenCalledTimes(2));
+});
+
+test('the session is resized when the terminal element is resized', async () => {
+  const renderObject = render(KubernetesTerminal, props);
+  await waitFor(() => expect(resizeCallbacks).toHaveLength(1));
+  const element = renderObject.getByLabelText('Terminal of container1');
+  Object.defineProperty(element, 'clientWidth', { value: 800 });
+  Object.defineProperty(element, 'clientHeight', { value: 600 });
+  vi.mocked(window.kubernetesExecResize).mockClear();
+
+  resizeCallbacks[0]?.();
+  await waitFor(() =>
+    expect(window.kubernetesExecResize).toHaveBeenCalledWith(1, expect.any(Number), expect.any(Number)),
+  );
 });

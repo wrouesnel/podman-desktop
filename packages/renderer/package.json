@@ -26,6 +26,7 @@
     "@types/validator": "^13.15.10",
     "@typescript-eslint/eslint-plugin": "^8.70.1",
     "@xterm/addon-serialize": "^0.14.0",
+    "dockview-core": "7.0.4",
     "dompurify": "^3.4.16",
     "eslint-plugin-svelte": "^3.23.0",
     "filesize": "^11.0.25",

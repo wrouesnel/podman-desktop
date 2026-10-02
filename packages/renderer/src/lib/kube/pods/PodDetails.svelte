@@ -16,13 +16,14 @@ import StateChange from '/@/lib/ui/StateChange.svelte';
 import { getTabUrl, isTabSelected } from '/@/lib/ui/Util';
 import Route from '/@/Route.svelte';
 import { kubernetesCurrentContextEvents, kubernetesCurrentContextPods } from '/@/stores/kubernetes-contexts-state';
+import { forgetTerminalWorkspace } from '/@/stores/kubernetes-terminal-workspace-store';
 
-import KubernetesTerminalBrowser from './KubernetesTerminalBrowser.svelte';
 import { PodUtils } from './pod-utils';
 import PodActions from './PodActions.svelte';
 import PodDetailsLogs from './PodDetailsLogs.svelte';
 import PodDetailsSummary from './PodDetailsSummary.svelte';
 import type { PodUI } from './PodUI';
+import KubernetesTerminalWorkspace from './terminal/KubernetesTerminalWorkspace.svelte';
 
 interface Props {
   name: string;
@@ -49,7 +50,8 @@ onMount(async () => {
     legacyEventsStore: kubernetesCurrentContextEvents,
     onResourceNotFound: () => {
       if (detailsPage) {
-        // the pod has been deleted
+        // the pod has been deleted: its terminal sessions are closed
+        forgetTerminalWorkspace(namespace, name);
         detailsPage.close();
       }
     },
@@ -119,7 +121,7 @@ async function loadDetails(): Promise<void> {
           <KubeEditYaml content={stringify(kubePod)} />
         </Route>
         <Route path="/k8s-terminal" breadcrumb="Terminal" navigationHint="tab">
-          <KubernetesTerminalBrowser pod={pod} />
+          <KubernetesTerminalWorkspace pod={pod} />
         </Route>
       {/if}
     {/snippet}

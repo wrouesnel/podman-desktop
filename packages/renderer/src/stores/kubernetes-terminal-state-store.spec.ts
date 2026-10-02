@@ -25,6 +25,7 @@ import { terminalStates } from '/@/stores/kubernetes-terminal-state-store';
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(window.kubernetesExecDetach).mockResolvedValue(undefined);
   vi.mocked(window.getConfigurationValue).mockImplementation(async (key: string) => {
     if (key === 'terminal.integrated.scrollback') {
       return 1000;
@@ -49,7 +50,12 @@ test('Test should check saved terminal state after destroying terminal window', 
     },
   );
 
-  const renderObject = render(KubernetesTerminal, { podName: 'podName', containerName: 'containerName' });
+  const renderObject = render(KubernetesTerminal, {
+    sessionKey: 'session1',
+    namespace: 'ns1',
+    podName: 'podName',
+    containerName: 'containerName',
+  });
   await waitFor(() => expect(window.kubernetesExec).toHaveBeenCalled());
 
   const terminals = get(terminalStates);
@@ -59,8 +65,7 @@ test('Test should check saved terminal state after destroying terminal window', 
   const terminalsAfterDestroy = get(terminalStates);
   expect(terminalsAfterDestroy.size).toBe(1);
 
-  const state = terminalsAfterDestroy.get('podName-containerName');
+  const state = terminalsAfterDestroy.get('session1');
 
-  expect(state.id).toBe(sendCallbackId);
   expect(state.terminal).toBeDefined();
 });

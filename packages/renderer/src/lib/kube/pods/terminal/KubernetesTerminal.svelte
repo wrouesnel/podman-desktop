@@ -1,174 +1,179 @@
 <script lang="ts">
+import '@xterm/xterm/css/xterm.css';
+
 import { TerminalSettings } from '@podman-desktop/core-api/terminal';
 import { FitAddon } from '@xterm/addon-fit';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import { type IDisposable, Terminal } from '@xterm/xterm';
 import { onDestroy, onMount } from 'svelte';
-import { router } from 'tinro';
 
 import { getTerminalTheme } from '/@/lib/terminal/terminal-theme';
 import { terminalStates } from '/@/stores/kubernetes-terminal-state-store';
 
+// A shell session in a container: `sessionKey` identifies the session, which is kept open when the component
+// is destroyed (its output is saved and restored when a component is created again for the same session)
 interface Props {
+  sessionKey: string;
+  namespace?: string;
   podName: string;
   containerName: string;
-  terminalXtermDiv?: HTMLElement;
 }
 
-let { podName, containerName, terminalXtermDiv = $bindable(document.createElement('div')) }: Props = $props();
-
-// On load, we collect the original pod and container name,
-// and we will use these to correctly save the terminal state when the component is destroyed.
-// Due to the way Svelte works, we need to store the original pod and container name in a separate / safe manner so that
-// the original values are not written over when the component is re-rendered.
-let originalPodName = podName;
-let originalContainerName = containerName;
-let terminalContent: string = '';
-let serializeAddon: SerializeAddon;
-
-let curRouterPath: string;
+let { sessionKey, namespace, podName, containerName }: Props = $props();
 
 interface State {
   terminal: string;
-  id: number;
 }
 
-let shellTerminal: Terminal;
-let screenReaderMode = true;
-
+let terminalXtermDiv: HTMLElement;
+let shellTerminal: Terminal | undefined;
+let serializeAddon: SerializeAddon | undefined;
+let fitAddon: FitAddon | undefined;
+let resizeObserver: ResizeObserver | undefined;
 let id: number | undefined;
 let onDataDisposable: IDisposable | undefined;
-
-router.subscribe(route => {
-  curRouterPath = route.path;
-});
+let destroyed = false;
 
 onMount(async () => {
-  const savedState = getSavedTerminalState(podName, containerName);
-  await initializeNewTerminal(terminalXtermDiv);
+  const savedState = getSavedTerminalState(sessionKey);
+  await initializeNewTerminal();
 
   // If there is a saved state with information in the terminal, we will write it to the terminal (it was serialized into a string before using the SerializeAddon)
-  // and then add a \r\n to the end of the terminal to ensure the cursor is on a new line.
   if (savedState?.terminal) {
-    shellTerminal.write(savedState.terminal);
-    shellTerminal.focus();
+    shellTerminal?.write(savedState.terminal);
+    shellTerminal?.focus();
   }
 });
 
 onDestroy(() => {
-  terminalContent = serializeAddon.serialize();
-  saveTerminalState(originalPodName, originalContainerName, { terminal: terminalContent, id: id } as State);
-  serializeAddon.dispose();
-  shellTerminal.dispose();
+  destroyed = true;
+  resizeObserver?.disconnect();
+  if (serializeAddon) {
+    saveTerminalState(sessionKey, { terminal: serializeAddon.serialize() });
+    serializeAddon.dispose();
+  }
+  // the session is kept open, but its output is not sent to this component anymore
+  if (id !== undefined) {
+    window.kubernetesExecDetach(id).catch((err: unknown) => console.error('Error detaching from the session', err));
+  }
+  onDataDisposable?.dispose();
+  shellTerminal?.dispose();
 });
 
+async function exec(): Promise<number> {
+  return window.kubernetesExec(
+    sessionKey,
+    namespace,
+    podName,
+    containerName,
+    (data: Buffer) => {
+      shellTerminal?.write(data);
+    },
+    (data: Buffer) => {
+      shellTerminal?.write(data);
+    },
+    reconnect,
+  );
+}
+
+function listenInput(terminal: Terminal): void {
+  onDataDisposable?.dispose();
+  onDataDisposable = terminal.onData(data => {
+    if (id !== undefined) {
+      window.kubernetesExecSend(id, data).catch((err: unknown) => console.error('Error sending data', err));
+    }
+  });
+}
+
+// the shell exited (or the connection has been closed): a new shell is started
 function reconnect(): void {
-  window
-    .kubernetesExec(
-      `${podName}-${containerName}`,
-      undefined,
-      podName,
-      containerName,
-      (data: Buffer) => {
-        shellTerminal.write(data);
-      },
-      (data: Buffer) => {
-        shellTerminal.write(data);
-      },
-      reconnect,
-    )
+  if (destroyed) {
+    return;
+  }
+  exec()
     .then(execId => {
       id = execId;
-
-      shellTerminal.clear();
-      onDataDisposable?.dispose();
-      onDataDisposable = shellTerminal.onData(data => {
-        window.kubernetesExecSend(id!, data).catch((err: unknown) => console.error('Error sending data', err));
-      });
+      shellTerminal?.clear();
+      if (shellTerminal) {
+        listenInput(shellTerminal);
+      }
+      resize().catch(console.error);
     })
     .catch((err: unknown) => console.error(`Error executing pod ${podName} container ${containerName}`, err));
 }
 
-async function initializeNewTerminal(container: HTMLElement): Promise<void> {
-  if (!terminalXtermDiv) {
+async function resize(): Promise<void> {
+  if (!shellTerminal || !fitAddon || !terminalXtermDiv.clientWidth || !terminalXtermDiv.clientHeight) {
     return;
   }
+  fitAddon.fit();
+  if (id !== undefined) {
+    await window.kubernetesExecResize(id, shellTerminal.cols, shellTerminal.rows);
+  }
+}
 
+async function initializeNewTerminal(): Promise<void> {
   const fontSize = await window.getConfigurationValue<number>(
     TerminalSettings.SectionName + '.' + TerminalSettings.FontSize,
   );
   const lineHeight = await window.getConfigurationValue<number>(
     TerminalSettings.SectionName + '.' + TerminalSettings.LineHeight,
   );
-
   const scrollback = await window.getConfigurationValue<number>(
     TerminalSettings.SectionName + '.' + TerminalSettings.Scrollback,
   );
 
-  shellTerminal = new Terminal({
+  const terminal = new Terminal({
     fontSize,
     lineHeight,
-    screenReaderMode,
+    screenReaderMode: true,
     theme: getTerminalTheme(),
     scrollback,
   });
+  shellTerminal = terminal;
 
-  id = await window.kubernetesExec(
-    `${podName}-${containerName}`,
-    undefined,
-    podName,
-    containerName,
-    (data: Buffer) => {
-      shellTerminal.write(data);
-    },
-    (data: Buffer) => {
-      shellTerminal.write(data);
-    },
-    reconnect,
-  );
+  id = await exec();
+  listenInput(terminal);
 
-  onDataDisposable?.dispose();
-  onDataDisposable = shellTerminal.onData(data => {
-    window.kubernetesExecSend(id!, data).catch((err: unknown) => console.error('Error sending data', err));
-  });
-
-  const fitAddon = new FitAddon();
+  fitAddon = new FitAddon();
   serializeAddon = new SerializeAddon();
-  shellTerminal.loadAddon(fitAddon);
-  shellTerminal.loadAddon(serializeAddon);
-  shellTerminal.open(container);
+  terminal.loadAddon(fitAddon);
+  terminal.loadAddon(serializeAddon);
+  terminal.open(terminalXtermDiv);
 
-  window.addEventListener('resize', () => {
-    const resizeAsync = async (): Promise<void> => {
-      //resize all opened terminals
-      if (curRouterPath.endsWith('/k8s-terminal')) {
-        fitAddon.fit();
-        if (id) {
-          await window.kubernetesExecResize(id, shellTerminal.cols, shellTerminal.rows);
-        }
-      }
-    };
-    resizeAsync().catch(console.error);
+  // the terminal is resized with its pane (window resize, split, sash moves, ...)
+  let resizeFrame: number | undefined;
+  resizeObserver = new ResizeObserver(() => {
+    if (resizeFrame !== undefined) {
+      cancelAnimationFrame(resizeFrame);
+    }
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = undefined;
+      resize().catch(console.error);
+    });
   });
-  fitAddon.fit();
-
-  await window.kubernetesExecResize(id, shellTerminal.cols, shellTerminal.rows);
+  resizeObserver.observe(terminalXtermDiv);
+  await resize();
 }
 
-function getSavedTerminalState(podName: string, containerName: string): State | undefined {
+function getSavedTerminalState(key: string): State | undefined {
   let state;
   terminalStates.subscribe(states => {
-    state = states.get(`${podName}-${containerName}`);
+    state = states.get(key);
   })();
   return state ? (state as unknown as State) : undefined;
 }
 
-function saveTerminalState(podName: string, containerName: string, state: State): void {
+function saveTerminalState(key: string, state: State): void {
   terminalStates.update(states => {
-    states.set(`${podName}-${containerName}`, state);
+    states.set(key, state);
     return states;
   });
 }
 </script>
 
-<div class="h-full w-full p-[5px] pr-0 bg-[var(--pd-terminal-background)]" bind:this={terminalXtermDiv}></div>
+<div
+  class="h-full w-full p-[5px] pr-0 bg-[var(--pd-terminal-background)]"
+  aria-label="Terminal of {containerName}"
+  bind:this={terminalXtermDiv}>
+</div>
