@@ -108,6 +108,7 @@ import {
   ResizableTerminalWriter,
   StringLineReader,
 } from './kubernetes-exec-transmitter.js';
+import { DEFAULT_DRAG_OUT_MAX_SIZE, DEFAULT_HELPER_IMAGE } from './pvc-browser/pvc-browser.js';
 
 interface ContextsManagerInterface {
   // indicate to the manager that the kubeconfig has changed
@@ -262,6 +263,19 @@ export class KubernetesClient {
           description: 'Use new version of Kubernetes contexts monitoring (needs restart)',
           type: 'boolean',
           default: true,
+        },
+        ['kubernetes.pvcBrowser.helperImage']: {
+          description:
+            'Image of the temporary pods used to browse the files of a PersistentVolumeClaim not mounted by a running pod (the image needs sh, tar, find, stat, du, mkdir, mv and rm)',
+          type: 'string',
+          default: DEFAULT_HELPER_IMAGE,
+        },
+        ['kubernetes.pvcBrowser.dragOutMaxSize']: {
+          description:
+            'Maximum size (in MB) of the files of a PersistentVolumeClaim which can be dragged out of the application (larger files are downloaded with the Download action)',
+          type: 'number',
+          default: DEFAULT_DRAG_OUT_MAX_SIZE / 1024 / 1024,
+          minimum: 1,
         },
         ['kubernetes.useInternalKubernetes']: {
           description: 'Use internal Kubernetes',
@@ -735,6 +749,15 @@ export class KubernetesClient {
         fieldSelector,
         labelSelector,
       });
+    } catch (error) {
+      throw this.wrapK8sClientError(error);
+    }
+  }
+
+  async deleteNamespacedPod(name: string, namespace: string): Promise<void> {
+    const k8sApi = this.kubeConfig.makeApiClient(CoreV1Api);
+    try {
+      await k8sApi.deleteNamespacedPod({ name, namespace });
     } catch (error) {
       throw this.wrapK8sClientError(error);
     }

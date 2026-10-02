@@ -111,6 +111,8 @@ import type {
   ProviderKubernetesConnectionInfo,
   ProxyState,
   PullEvent,
+  PvcBrowserSessionInfo,
+  PvcFileEntry,
   ReleaseNotesInfo,
   ResourceCount,
   ResourceName,
@@ -229,6 +231,13 @@ import { ImageFilesRegistry } from './image-files-registry.js';
 import { ImageRegistry } from './image-registry.js';
 import { InputQuickPickRegistry } from './input-quickpick/input-quickpick-registry.js';
 import { KubernetesClient } from './kubernetes/kubernetes-client.js';
+import { getDragIcon } from './kubernetes/pvc-browser/drag-icon.js';
+import {
+  DEFAULT_DRAG_OUT_MAX_SIZE,
+  DEFAULT_HELPER_IMAGE,
+  PvcBrowser,
+  type TransferOptions,
+} from './kubernetes/pvc-browser/pvc-browser.js';
 import { downloadGuideList } from './learning-center/learning-center.js';
 import { LearningCenterInit } from './learning-center-init.js';
 import { LibpodApiInit } from './libpod-api-enable/libpod-api-init.js';
@@ -248,6 +257,7 @@ import { StatusbarProvidersInit } from './statusbar/statusbar-providers-init.js'
 import { StatusBarRegistry } from './statusbar/statusbar-registry.js';
 import { NotificationRegistry } from './tasks/notification-registry.js';
 import { ProgressImpl } from './tasks/progress-impl.js';
+import type { Task } from './tasks/tasks.js';
 import { CIDetection } from './telemetry/ci-detection.js';
 import { EventType, Telemetry } from './telemetry/telemetry.js';
 import { TerminalInit } from './terminal-init.js';
@@ -3148,6 +3158,154 @@ export class PluginSystem {
 
     this.ipcHandle('kubernetes-client:execIntoContainerClose', async (_listener, sessionKey: string): Promise<void> => {
       kubernetesClient.closeExec(sessionKey);
+    });
+
+    const pvcBrowser = new PvcBrowser(kubernetesClient, () => {
+      const configuration = configurationRegistry.getConfiguration('kubernetes.pvcBrowser');
+      return {
+        helperImage: configuration.get<string>('helperImage') ?? DEFAULT_HELPER_IMAGE,
+        dragOutMaxSize:
+          (configuration.get<number>('dragOutMaxSize') ?? DEFAULT_DRAG_OUT_MAX_SIZE / 1024 / 1024) * 1024 * 1024,
+      };
+    });
+    app.on('before-quit', () => {
+      pvcBrowser.dispose().catch((error: unknown) => console.error('Error closing the volume browsers', error));
+    });
+
+    this.ipcHandle(
+      'kubernetes-pvc-browser:open',
+      async (_listener, namespace: string, pvcName: string): Promise<PvcBrowserSessionInfo> => {
+        return pvcBrowser.openSession(namespace, pvcName);
+      },
+    );
+
+    this.ipcHandle('kubernetes-pvc-browser:close', async (_listener, sessionId: string): Promise<void> => {
+      return pvcBrowser.closeSession(sessionId);
+    });
+
+    this.ipcHandle(
+      'kubernetes-pvc-browser:list',
+      async (_listener, sessionId: string, dir: string): Promise<PvcFileEntry[]> => {
+        return pvcBrowser.list(sessionId, dir);
+      },
+    );
+
+    this.ipcHandle(
+      'kubernetes-pvc-browser:mkdir',
+      async (_listener, sessionId: string, dir: string, name: string): Promise<void> => {
+        return pvcBrowser.mkdir(sessionId, dir, name);
+      },
+    );
+
+    this.ipcHandle(
+      'kubernetes-pvc-browser:rename',
+      async (_listener, sessionId: string, path: string, newName: string): Promise<void> => {
+        return pvcBrowser.rename(sessionId, path, newName);
+      },
+    );
+
+    this.ipcHandle(
+      'kubernetes-pvc-browser:delete',
+      async (_listener, sessionId: string, paths: string[]): Promise<void> => {
+        return pvcBrowser.delete(sessionId, paths);
+      },
+    );
+
+    // runs a transfer in a cancellable task showing its progress
+    const runPvcTransfer = async (
+      title: string,
+      cancellableTokenId: number | undefined,
+      transfer: (options: TransferOptions) => Promise<void>,
+    ): Promise<Task> => {
+      const abortController = this.createAbortControllerOnCancellationToken(
+        cancellationTokenRegistry,
+        cancellableTokenId,
+      );
+      const task = taskManager.createTask({
+        title,
+        cancellable: cancellableTokenId !== undefined,
+        cancellationTokenSourceId: cancellableTokenId,
+      });
+      task.progress = 0;
+      let lastProgress = 0;
+      try {
+        await transfer({
+          signal: abortController?.signal,
+          onProgress: (transferred, total) => {
+            const progress = total ? Math.min(99, Math.floor((transferred * 100) / total)) : 0;
+            if (progress !== lastProgress) {
+              lastProgress = progress;
+              task.progress = progress;
+            }
+          },
+        });
+        task.progress = 100;
+        task.status = 'success';
+      } catch (error: unknown) {
+        if (abortController?.signal.aborted) {
+          task.status = 'canceled';
+        } else {
+          task.error = `${title} failed: ${error instanceof Error ? error.message : String(error)}`;
+        }
+        throw error;
+      }
+      return task;
+    };
+
+    this.ipcHandle(
+      'kubernetes-pvc-browser:download',
+      async (
+        _listener,
+        sessionId: string,
+        paths: string[],
+        localDir: string,
+        cancellableTokenId?: number,
+      ): Promise<void> => {
+        const { pvcName } = pvcBrowser.getSession(sessionId);
+        const what = paths.length === 1 ? path.posix.basename(paths[0] ?? '') : `${paths.length} items`;
+        const task = await runPvcTransfer(`Downloading ${what} from ${pvcName}`, cancellableTokenId, async options => {
+          await pvcBrowser.download(sessionId, paths, localDir, options);
+        });
+        task.action = {
+          name: 'Open folder',
+          execute: (): void => {
+            shell.openPath(localDir).catch((error: unknown) => console.error('Unable to open the folder', error));
+          },
+        };
+      },
+    );
+
+    this.ipcHandle(
+      'kubernetes-pvc-browser:upload',
+      async (
+        _listener,
+        sessionId: string,
+        localPaths: string[],
+        dir: string,
+        cancellableTokenId?: number,
+      ): Promise<void> => {
+        const { pvcName } = pvcBrowser.getSession(sessionId);
+        const what = localPaths.length === 1 ? path.basename(localPaths[0] ?? '') : `${localPaths.length} items`;
+        await runPvcTransfer(`Uploading ${what} to ${pvcName}`, cancellableTokenId, async options => {
+          await pvcBrowser.upload(sessionId, localPaths, dir, options);
+        });
+      },
+    );
+
+    this.ipcHandle(
+      'kubernetes-pvc-browser:prepareDragOut',
+      async (_listener, sessionId: string, paths: string[]): Promise<string[]> => {
+        return pvcBrowser.prepareDragOut(sessionId, paths);
+      },
+    );
+
+    // drag of files prepared by prepareDragOut out of the application (must be called on dragstart)
+    ipcMain.on('kubernetes-pvc-browser:startDragOut', (event: IpcMainEvent, localPaths: string[]): void => {
+      const files = localPaths.filter(localPath => pvcBrowser.isDragOutPath(localPath));
+      const [file] = files;
+      if (file) {
+        event.sender.startDrag({ file, files, icon: getDragIcon() });
+      }
     });
 
     this.ipcHandle('kubernetes-client:refreshContextState', async (_listener, context: string): Promise<void> => {

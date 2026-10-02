@@ -59,6 +59,7 @@ export * from './kubernetes-contexts-states.js';
 export * from './kubernetes-informer-info.js';
 export * from './kubernetes-navigation.js';
 export * from './kubernetes-port-forward-model.js';
+export * from './kubernetes-pvc-browser.js';
 export * from './kubernetes-resource-count.js';
 export * from './kubernetes-resource-types.js';
 export * from './kubernetes-resources.js';

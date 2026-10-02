@@ -117,6 +117,8 @@ import type {
   ProviderKubernetesConnectionInfo,
   ProxyState,
   PullEvent,
+  PvcBrowserSessionInfo,
+  PvcFileEntry,
   ReleaseNotesInfo,
   ResourceCount,
   ResourceName,
@@ -156,7 +158,7 @@ import type {
 } from '@podman-desktop/core-api/libpod';
 import type { ExtensionBanner, RecommendedRegistry } from '@podman-desktop/core-api/recommendations';
 import type { PinOption } from '@podman-desktop/core-api/status-bar';
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 export type OpenSaveDialogResultCallback = (result: string | string[] | undefined) => void;
 
@@ -2397,6 +2399,78 @@ export function initExposure(): void {
   // closes the session `sessionKey`
   contextBridge.exposeInMainWorld('kubernetesExecClose', async (sessionKey: string): Promise<void> => {
     return ipcInvoke('kubernetes-client:execIntoContainerClose', sessionKey);
+  });
+
+  // browsing of the files of a PersistentVolumeClaim
+  contextBridge.exposeInMainWorld(
+    'kubernetesPvcBrowserOpen',
+    async (namespace: string, pvcName: string): Promise<PvcBrowserSessionInfo> => {
+      return ipcInvoke('kubernetes-pvc-browser:open', namespace, pvcName);
+    },
+  );
+
+  contextBridge.exposeInMainWorld('kubernetesPvcBrowserClose', async (sessionId: string): Promise<void> => {
+    return ipcInvoke('kubernetes-pvc-browser:close', sessionId);
+  });
+
+  contextBridge.exposeInMainWorld(
+    'kubernetesPvcBrowserList',
+    async (sessionId: string, dir: string): Promise<PvcFileEntry[]> => {
+      return ipcInvoke('kubernetes-pvc-browser:list', sessionId, dir);
+    },
+  );
+
+  contextBridge.exposeInMainWorld(
+    'kubernetesPvcBrowserMkdir',
+    async (sessionId: string, dir: string, name: string): Promise<void> => {
+      return ipcInvoke('kubernetes-pvc-browser:mkdir', sessionId, dir, name);
+    },
+  );
+
+  contextBridge.exposeInMainWorld(
+    'kubernetesPvcBrowserRename',
+    async (sessionId: string, path: string, newName: string): Promise<void> => {
+      return ipcInvoke('kubernetes-pvc-browser:rename', sessionId, path, newName);
+    },
+  );
+
+  contextBridge.exposeInMainWorld(
+    'kubernetesPvcBrowserDelete',
+    async (sessionId: string, paths: string[]): Promise<void> => {
+      return ipcInvoke('kubernetes-pvc-browser:delete', sessionId, paths);
+    },
+  );
+
+  contextBridge.exposeInMainWorld(
+    'kubernetesPvcBrowserDownload',
+    async (sessionId: string, paths: string[], localDir: string, cancellableTokenId?: number): Promise<void> => {
+      return ipcInvoke('kubernetes-pvc-browser:download', sessionId, paths, localDir, cancellableTokenId);
+    },
+  );
+
+  contextBridge.exposeInMainWorld(
+    'kubernetesPvcBrowserUpload',
+    async (sessionId: string, localPaths: string[], dir: string, cancellableTokenId?: number): Promise<void> => {
+      return ipcInvoke('kubernetes-pvc-browser:upload', sessionId, localPaths, dir, cancellableTokenId);
+    },
+  );
+
+  // downloads files to a temporary directory, to be dragged out with kubernetesPvcBrowserStartDragOut
+  contextBridge.exposeInMainWorld(
+    'kubernetesPvcBrowserPrepareDragOut',
+    async (sessionId: string, paths: string[]): Promise<string[]> => {
+      return ipcInvoke('kubernetes-pvc-browser:prepareDragOut', sessionId, paths);
+    },
+  );
+
+  // starts the drag of local files out of the application (to be called in a dragstart handler)
+  contextBridge.exposeInMainWorld('kubernetesPvcBrowserStartDragOut', (localPaths: string[]): void => {
+    ipcRenderer.send('kubernetes-pvc-browser:startDragOut', localPaths);
+  });
+
+  // the local path of a file dropped in the application
+  contextBridge.exposeInMainWorld('getPathForFile', (file: File): string => {
+    return webUtils.getPathForFile(file);
   });
 
   contextBridge.exposeInMainWorld('kubernetesExecSend', async (dataId: number, content: string): Promise<void> => {
